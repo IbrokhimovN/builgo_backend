@@ -3,7 +3,7 @@ Django admin configuration for BuildGo Backend.
 """
 
 from django.contrib import admin
-from .models import User, Store, Seller, Category, Product, Order, OrderItem
+from .models import User, Store, Seller, Category, Product, Order, OrderItem, Location
 
 
 @admin.register(User)
@@ -72,3 +72,12 @@ class OrderItemAdmin(admin.ModelAdmin):
     search_fields = ['order__id', 'product__name']
     raw_id_fields = ['order', 'product']
     readonly_fields = ['price_at_order']
+
+
+@admin.register(Location)
+class LocationAdmin(admin.ModelAdmin):
+    list_display = ['name', 'user', 'store', 'address', 'is_default', 'created_at']
+    list_filter = ['is_default', 'created_at']
+    search_fields = ['name', 'address', 'user__first_name', 'user__last_name', 'store__name']
+    readonly_fields = ['created_at', 'updated_at']
+    raw_id_fields = ['user', 'store']

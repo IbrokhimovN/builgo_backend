@@ -189,3 +189,54 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
+
+
+class Location(models.Model):
+    """
+    Location model for customers (users) and sellers (stores).
+    - Customer location: user is set, store is null
+    - Seller/Store location: store is set, user is null
+    """
+    name = models.CharField(max_length=100)  # e.g., "Home", "Office", "Warehouse"
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    address = models.TextField()
+    
+    # For customer locations
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='locations',
+        null=True,
+        blank=True
+    )
+    
+    # For seller/store locations
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name='locations',
+        null=True,
+        blank=True
+    )
+    
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'locations'
+        ordering = ['-is_default', '-created_at']
+
+    def __str__(self):
+        owner = self.user or self.store
+        return f"{self.name} - {owner}"
+
+    def save(self, *args, **kwargs):
+        # Ensure only one default location per user/store
+        if self.is_default:
+            if self.user:
+                Location.objects.filter(user=self.user, is_default=True).update(is_default=False)
+            elif self.store:
+                Location.objects.filter(store=self.store, is_default=True).update(is_default=False)
+        super().save(*args, **kwargs)

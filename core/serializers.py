@@ -4,7 +4,7 @@ DRF Serializers for BuildGo Backend.
 
 from rest_framework import serializers
 from .models import (
-    User, Store, Seller, Category, Product, Order, OrderItem
+    User, Store, Seller, Category, Product, Order, OrderItem, Location
 )
 
 
@@ -183,3 +183,37 @@ class SellerSerializer(serializers.ModelSerializer):
         model = Seller
         fields = ['id', 'user', 'store', 'is_active', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+
+class LocationSerializer(serializers.ModelSerializer):
+    """
+    Location serializer for reading location details.
+    """
+    user_name = serializers.SerializerMethodField()
+    store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = Location
+        fields = [
+            'id', 'name', 'latitude', 'longitude', 'address',
+            'user', 'user_name', 'store', 'store_name',
+            'is_default', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'user_name', 'store_name']
+
+    def get_user_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}"
+        return None
+
+
+class LocationCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating/updating locations.
+    User or store is auto-assigned based on context.
+    """
+    class Meta:
+        model = Location
+        fields = ['id', 'name', 'latitude', 'longitude', 'address', 'is_default']
+        read_only_fields = ['id']
+

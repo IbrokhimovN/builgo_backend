@@ -8,11 +8,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q
 
-from .models import User, Store, Seller, Category, Product, Order
+from .models import User, Store, Seller, Category, Product, Order, Location
 from .serializers import (
     TelegramAuthSerializer, UserSerializer, StoreSerializer,
     CategorySerializer, ProductSerializer, ProductCreateSerializer,
-    OrderSerializer, OrderCreateSerializer, SellerSerializer
+    OrderSerializer, OrderCreateSerializer, SellerSerializer,
+    LocationSerializer, LocationCreateSerializer
 )
 from .permissions import IsSeller, IsStoreOwner
 
@@ -293,3 +294,194 @@ class SellerProductUpdateView(APIView):
             serializer.save()
             return Response(ProductSerializer(product).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ============================================
+# CUSTOMER LOCATION ENDPOINTS
+# ============================================
+
+class CustomerLocationListCreateView(APIView):
+    """
+    GET /api/locations/
+    POST /api/locations/
+    List and create customer locations.
+    """
+    
+    def get(self, request):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        if not telegram_id:
+            return Response(
+                {'error': 'Telegram authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        try:
+            user = User.objects.get(telegram_id=telegram_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        locations = Location.objects.filter(user=user)
+        return Response(LocationSerializer(locations, many=True).data)
+    
+    def post(self, request):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        if not telegram_id:
+            return Response(
+                {'error': 'Telegram authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        try:
+            user = User.objects.get(telegram_id=telegram_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = LocationCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            location = serializer.save(user=user)
+            return Response(
+                LocationSerializer(location).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CustomerLocationDetailView(APIView):
+    """
+    PATCH /api/locations/{id}/
+    DELETE /api/locations/{id}/
+    Update or delete a customer location.
+    """
+    
+    def patch(self, request, pk):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        if not telegram_id:
+            return Response(
+                {'error': 'Telegram authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        try:
+            user = User.objects.get(telegram_id=telegram_id)
+            location = Location.objects.get(pk=pk, user=user)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Location.DoesNotExist:
+            return Response(
+                {'error': 'Location not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = LocationCreateSerializer(location, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(LocationSerializer(location).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        if not telegram_id:
+            return Response(
+                {'error': 'Telegram authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        try:
+            user = User.objects.get(telegram_id=telegram_id)
+            location = Location.objects.get(pk=pk, user=user)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Location.DoesNotExist:
+            return Response(
+                {'error': 'Location not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        location.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ============================================
+# SELLER LOCATION ENDPOINTS
+# ============================================
+
+class SellerLocationListCreateView(APIView):
+    """
+    GET /api/seller/locations/
+    POST /api/seller/locations/
+    List and create seller store locations.
+    """
+    permission_classes = [IsSeller]
+    
+    def get(self, request):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        seller = Seller.objects.get(user__telegram_id=telegram_id)
+        locations = Location.objects.filter(store=seller.store)
+        return Response(LocationSerializer(locations, many=True).data)
+    
+    def post(self, request):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        seller = Seller.objects.get(user__telegram_id=telegram_id)
+        
+        serializer = LocationCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            location = serializer.save(store=seller.store)
+            return Response(
+                LocationSerializer(location).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SellerLocationDetailView(APIView):
+    """
+    PATCH /api/seller/locations/{id}/
+    DELETE /api/seller/locations/{id}/
+    Update or delete a seller store location.
+    """
+    permission_classes = [IsSeller]
+    
+    def patch(self, request, pk):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        seller = Seller.objects.get(user__telegram_id=telegram_id)
+        
+        try:
+            location = Location.objects.get(pk=pk, store=seller.store)
+        except Location.DoesNotExist:
+            return Response(
+                {'error': 'Location not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = LocationCreateSerializer(location, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(LocationSerializer(location).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        telegram_id = getattr(request, 'telegram_user_id', None)
+        seller = Seller.objects.get(user__telegram_id=telegram_id)
+        
+        try:
+            location = Location.objects.get(pk=pk, store=seller.store)
+        except Location.DoesNotExist:
+            return Response(
+                {'error': 'Location not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        location.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

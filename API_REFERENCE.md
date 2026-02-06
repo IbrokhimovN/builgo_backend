@@ -319,6 +319,127 @@ Content-Type: application/json
 }
 ```
 
+### List Store Locations
+```http
+GET /api/seller/locations/
+X-Telegram-Init-Data: <initData>
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "Warehouse",
+    "latitude": "41.311081",
+    "longitude": "69.240562",
+    "address": "Tashkent, Uzbekistan",
+    "user": null,
+    "user_name": null,
+    "store": 1,
+    "store_name": "My Store",
+    "is_default": true,
+    "created_at": "2026-02-05T12:00:00Z",
+    "updated_at": "2026-02-05T12:00:00Z"
+  }
+]
+```
+
+### Create Store Location
+```http
+POST /api/seller/locations/
+X-Telegram-Init-Data: <initData>
+Content-Type: application/json
+
+{
+  "name": "Warehouse",
+  "latitude": 41.311081,
+  "longitude": 69.240562,
+  "address": "Tashkent, Uzbekistan",
+  "is_default": true
+}
+```
+
+### Update Store Location
+```http
+PATCH /api/seller/locations/1/
+X-Telegram-Init-Data: <initData>
+Content-Type: application/json
+
+{
+  "address": "Updated address"
+}
+```
+
+### Delete Store Location
+```http
+DELETE /api/seller/locations/1/
+X-Telegram-Init-Data: <initData>
+```
+
+---
+
+## Customer Location Endpoints
+
+### List My Locations
+```http
+GET /api/locations/
+X-Telegram-Init-Data: <initData>
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "Home",
+    "latitude": "41.311081",
+    "longitude": "69.240562",
+    "address": "Tashkent, Uzbekistan",
+    "user": 1,
+    "user_name": "John Doe",
+    "store": null,
+    "store_name": null,
+    "is_default": true,
+    "created_at": "2026-02-05T12:00:00Z",
+    "updated_at": "2026-02-05T12:00:00Z"
+  }
+]
+```
+
+### Create Location
+```http
+POST /api/locations/
+X-Telegram-Init-Data: <initData>
+Content-Type: application/json
+
+{
+  "name": "Home",
+  "latitude": 41.311081,
+  "longitude": 69.240562,
+  "address": "Tashkent, Uzbekistan",
+  "is_default": true
+}
+```
+
+### Update Location
+```http
+PATCH /api/locations/1/
+X-Telegram-Init-Data: <initData>
+Content-Type: application/json
+
+{
+  "name": "Office",
+  "is_default": false
+}
+```
+
+### Delete Location
+```http
+DELETE /api/locations/1/
+X-Telegram-Init-Data: <initData>
+```
+
 ---
 
 ## Testing with cURL

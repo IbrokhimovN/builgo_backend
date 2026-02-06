@@ -18,9 +18,17 @@ urlpatterns = [
     path('orders/', views.OrderCreateView.as_view(), name='order-create'),
     path('search/', views.search_products, name='search-products'),
     
+    # Customer location endpoints
+    path('locations/', views.CustomerLocationListCreateView.as_view(), name='customer-locations'),
+    path('locations/<int:pk>/', views.CustomerLocationDetailView.as_view(), name='customer-location-detail'),
+    
     # Seller endpoints
     path('seller/orders/', views.SellerOrdersView.as_view(), name='seller-orders'),
     path('seller/orders/<int:pk>/', views.SellerOrderUpdateView.as_view(), name='seller-order-update'),
     path('seller/products/', views.SellerProductCreateView.as_view(), name='seller-product-create'),
     path('seller/products/<int:pk>/', views.SellerProductUpdateView.as_view(), name='seller-product-update'),
+    
+    # Seller location endpoints
+    path('seller/locations/', views.SellerLocationListCreateView.as_view(), name='seller-locations'),
+    path('seller/locations/<int:pk>/', views.SellerLocationDetailView.as_view(), name='seller-location-detail'),
 ]
