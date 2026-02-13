@@ -2,47 +2,46 @@ name: 🚀 Deploy BuildGo (Backend + Bot)
 
 on:
   push:
-    branches: [main]
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: 📥 Checkout repo
         uses: actions/checkout@v4
 
-      - name: Deploy to DigitalOcean
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DO_HOST }}
-          username: root
-          key: ${{ secrets.DO_SSH_KEY }}
-          script: |
+      - name: 🔑 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.DO_HOST }} >> ~/.ssh/known_hosts
+
+      - name: 🚀 Deploy to DigitalOcean
+        run: |
+          ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'EOF'
             set -e
 
-            echo "📂 Enter project"
+            echo "📦 Moving to project directory"
             cd /var/www/builgo_backend
 
-            echo "🔄 Git pull"
+            echo "🔄 Pulling latest code"
             git pull origin main
 
-            echo "🐍 Activate venv"
+            echo "🐍 Activating virtualenv"
             source venv/bin/activate
 
-            echo "📦 Install deps"
+            echo "📦 Installing dependencies"
             pip install -r requirements.txt
 
-            echo "🧱 Django migrate"
+            echo "🗄️ Running migrations"
             python manage.py migrate
 
-            echo "🎨 Collect static"
-            python manage.py collectstatic --noinput
-
-            echo "🔁 Restart gunicorn"
-            systemctl restart gunicorn
-
-            echo "🤖 Restart telegram bot"
-            systemctl restart buildgo-bot
+            echo "🔁 Restarting services"
+            sudo systemctl restart gunicorn
+            sudo systemctl restart buildgo-bot || true
 
             echo "✅ Deploy finished"
+          EOF
