@@ -25,7 +25,7 @@ jobs:
             set -e
 
             echo "📂 Enter project"
-            cd /var/www/buildgo_backend
+            cd /var/www/builgo_backend
 
             echo "🔄 Git pull"
             git pull origin main
