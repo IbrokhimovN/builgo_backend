@@ -2,46 +2,47 @@ name: 🚀 Deploy BuildGo (Backend + Bot)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: 🔑 Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DO_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.DO_HOST }} >> ~/.ssh/known_hosts
-
-      - name: 🚀 Deploy to DigitalOcean
-        run: |
-          ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'EOF'
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: ${{ secrets.DO_USER }}
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
             set -e
 
-            echo "📦 Moving to project directory"
+            echo "📂 Enter project"
             cd /var/www/builgo_backend
 
-            echo "🔄 Pulling latest code"
+            echo "🔄 Git pull"
             git pull origin main
 
-            echo "🐍 Activating virtualenv"
+            echo "🐍 Activate venv"
             source venv/bin/activate
 
-            echo "📦 Installing dependencies"
+            echo "📦 Install deps"
             pip install -r requirements.txt
 
-            echo "🗄️ Running migrations"
+            echo "🧱 Django migrate"
             python manage.py migrate
 
-            echo "🔁 Restarting services"
-            sudo systemctl restart gunicorn
-            sudo systemctl restart buildgo-bot || true
+            echo "🎨 Collect static"
+            python manage.py collectstatic --noinput
+
+            echo "🔁 Restart gunicorn"
+            systemctl restart gunicorn
+
+            echo "🤖 Restart telegram bot"
+            systemctl restart buildgo-bot
 
             echo "✅ Deploy finished"
-          EOF
