@@ -8,37 +8,22 @@ from .models import (
 )
 
 
-class TelegramAuthSerializer(serializers.Serializer):
-    """
-    Serializer for buyer registration via Telegram bot.
-    """
-    telegram_id = serializers.IntegerField()
-    first_name = serializers.CharField(max_length=100)
-    last_name = serializers.CharField(max_length=100)
-    phone = serializers.CharField(max_length=20)
-
-    def create(self, validated_data):
-        # Create or update user with role=buyer
-        user, created = User.objects.update_or_create(
-            telegram_id=validated_data['telegram_id'],
-            defaults={
-                'first_name': validated_data['first_name'],
-                'last_name': validated_data['last_name'],
-                'phone': validated_data['phone'],
-                'role': 'buyer'
-            }
-        )
-        return user
-
-
 class UserSerializer(serializers.ModelSerializer):
     """
-    Basic user serializer.
+    User profile serializer.
     """
     class Meta:
         model = User
-        fields = ['id', 'telegram_id', 'first_name', 'last_name', 'phone', 'role', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'telegram_id', 'first_name', 'last_name', 'phone', 'role', 'date_joined']
+        read_only_fields = ['id', 'date_joined']
+
+
+class TelegramAuthSerializer(serializers.Serializer):
+    """
+    Serializer for Telegram Mini App authentication.
+    Accepts raw initData string from Telegram WebApp.
+    """
+    init_data = serializers.CharField()
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -67,7 +52,7 @@ class ProductSerializer(serializers.ModelSerializer):
     """
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
-    
+
     class Meta:
         model = Product
         fields = [
@@ -94,7 +79,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_unit = serializers.CharField(source='product.unit', read_only=True)
-    
+
     class Meta:
         model = OrderItem
         fields = ['id', 'product', 'product_name', 'product_unit', 'quantity', 'price_at_order']
@@ -108,7 +93,7 @@ class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user_name = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True)
-    
+
     class Meta:
         model = Order
         fields = [
@@ -136,14 +121,14 @@ class OrderCreateSerializer(serializers.Serializer):
         """Validate that items list is not empty and has required fields."""
         if not items:
             raise serializers.ValidationError("Order must have at least one item")
-        
+
         for item in items:
             if 'product' not in item or 'quantity' not in item:
                 raise serializers.ValidationError("Each item must have 'product' and 'quantity'")
-            
+
             if item['quantity'] <= 0:
                 raise serializers.ValidationError("Quantity must be greater than 0")
-        
+
         return items
 
     def create(self, validated_data):
@@ -178,7 +163,7 @@ class SellerSerializer(serializers.ModelSerializer):
     """
     user = UserSerializer(read_only=True)
     store = StoreSerializer(read_only=True)
-    
+
     class Meta:
         model = Seller
         fields = ['id', 'user', 'store', 'is_active', 'created_at']
@@ -191,7 +176,7 @@ class LocationSerializer(serializers.ModelSerializer):
     """
     user_name = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
-    
+
     class Meta:
         model = Location
         fields = [
@@ -216,4 +201,3 @@ class LocationCreateSerializer(serializers.ModelSerializer):
         model = Location
         fields = ['id', 'name', 'latitude', 'longitude', 'address', 'is_default']
         read_only_fields = ['id']
-

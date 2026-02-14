@@ -1,17 +1,39 @@
 """
 Django admin configuration for BuildGo Backend.
+Uses custom UserAdmin for AbstractUser-based User model.
 """
 
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import User, Store, Seller, Category, Product, Order, OrderItem, Location
 
 
 @admin.register(User)
-class UserAdmin(admin.ModelAdmin):
-    list_display = ['telegram_id', 'first_name', 'last_name', 'phone', 'role', 'created_at']
-    list_filter = ['role', 'created_at']
+class UserAdmin(BaseUserAdmin):
+    """
+    Custom admin for User model (extends AbstractUser).
+    Role is editable in admin — this is how buyers get promoted to sellers.
+    """
+    list_display = ['telegram_id', 'first_name', 'last_name', 'phone', 'role', 'is_active', 'date_joined']
+    list_filter = ['role', 'is_active', 'date_joined']
     search_fields = ['telegram_id', 'first_name', 'last_name', 'phone']
-    readonly_fields = ['created_at', 'updated_at']
+    ordering = ['-date_joined']
+
+    # Override fieldsets to show our custom fields
+    fieldsets = (
+        (None, {'fields': ('telegram_id',)}),
+        ('Personal Info', {'fields': ('first_name', 'last_name', 'phone')}),
+        ('Role', {'fields': ('role',)}),
+        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
+        ('Important dates', {'fields': ('last_login', 'date_joined')}),
+    )
+
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('telegram_id', 'first_name', 'last_name', 'role', 'password1', 'password2'),
+        }),
+    )
 
 
 @admin.register(Store)

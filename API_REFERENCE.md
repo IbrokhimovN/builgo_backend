@@ -7,23 +7,69 @@ http://localhost:8000
 
 ## Authentication
 
-All buyer/seller endpoints expect `X-Telegram-Init-Data` header with initData from Telegram Mini App.
+**JWT Bearer Token** — All protected endpoints require `Authorization` header:
+```
+Authorization: Bearer <access_token>
+```
+
+### How to get JWT tokens:
+1. Telegram Mini App sends `initData` to `POST /api/telegram-auth/`
+2. Backend verifies HMAC-SHA256 and returns `access` + `refresh` tokens
+3. Use `access` token in `Authorization: Bearer <token>` header
+4. When access token expires, refresh via `POST /api/token/refresh/`
 
 ---
 
 ## Authentication Endpoints
 
-### Register/Update Buyer
+### Telegram Auth (Login/Register)
 ```http
 POST /api/telegram-auth/
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
-  "first_name": "John",
-  "last_name": "Doe",
-  "phone": "+998901234567"
+  "init_data": "query_id=AAHdF6IQ...&user=%7B%22id%22%3A123456789...&auth_date=1234567890&hash=abc123..."
 }
+```
+
+**Response:**
+```json
+{
+  "access": "eyJhbGciOiJIUzI1NiIs...",
+  "refresh": "eyJhbGciOiJIUzI1NiIs...",
+  "user": {
+    "id": 1,
+    "telegram_id": 123456789,
+    "first_name": "John",
+    "last_name": "Doe",
+    "phone": "",
+    "role": "buyer",
+    "date_joined": "2026-01-29T21:00:00Z"
+  }
+}
+```
+
+### Refresh Access Token
+```http
+POST /api/token/refresh/
+Content-Type: application/json
+
+{
+  "refresh": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+**Response:**
+```json
+{
+  "access": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
+
+### Get My Profile
+```http
+GET /api/me/
+Authorization: Bearer <access_token>
 ```
 
 **Response:**
@@ -35,7 +81,7 @@ Content-Type: application/json
   "last_name": "Doe",
   "phone": "+998901234567",
   "role": "buyer",
-  "created_at": "2026-01-29T21:00:00Z"
+  "date_joined": "2026-01-29T21:00:00Z"
 }
 ```
 
@@ -67,7 +113,28 @@ GET /api/check-seller/?telegram_id=123456789
 ### Get Seller Profile
 ```http
 GET /api/seller/me/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
+```
+
+### Seller Dashboard
+```http
+GET /api/seller/dashboard/
+Authorization: Bearer <access_token>
+```
+> ⚠️ Requires `role=seller`. Returns 403 if buyer.
+
+**Response:**
+```json
+{
+  "seller": {
+    "id": 1,
+    "user": { ... },
+    "store": { ... },
+    "is_active": true,
+    "created_at": "2026-01-29T21:00:00Z"
+  },
+  "message": "Seller dashboard data"
+}
 ```
 
 ---
@@ -152,7 +219,7 @@ GET /api/stores/1/products/?category=1
 ### Create Order
 ```http
 POST /api/orders/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -218,10 +285,12 @@ GET /api/search/?q=cement
 
 ## Seller Endpoints
 
+> All seller endpoints require `Authorization: Bearer <token>` and `role=seller`.
+
 ### List Orders (Seller's Store Only)
 ```http
 GET /api/seller/orders/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 ```
 
 **Response:**
@@ -246,7 +315,7 @@ X-Telegram-Init-Data: <initData>
 ### Update Order Status
 ```http
 PATCH /api/seller/orders/1/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -266,7 +335,7 @@ Content-Type: application/json
 ### Create Product
 ```http
 POST /api/seller/products/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -278,7 +347,7 @@ Content-Type: application/json
 }
 ```
 
-**Note:** `store` is auto-assigned from seller's telegram_id. DO NOT send store_id.
+**Note:** `store` is auto-assigned from seller's profile. DO NOT send store_id.
 
 **Response:**
 ```json
@@ -299,7 +368,7 @@ Content-Type: application/json
 ### Update Product
 ```http
 PATCH /api/seller/products/2/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -322,7 +391,7 @@ Content-Type: application/json
 ### List Store Locations
 ```http
 GET /api/seller/locations/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 ```
 
 **Response:**
@@ -348,7 +417,7 @@ X-Telegram-Init-Data: <initData>
 ### Create Store Location
 ```http
 POST /api/seller/locations/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -363,7 +432,7 @@ Content-Type: application/json
 ### Update Store Location
 ```http
 PATCH /api/seller/locations/1/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -374,7 +443,7 @@ Content-Type: application/json
 ### Delete Store Location
 ```http
 DELETE /api/seller/locations/1/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 ```
 
 ---
@@ -384,7 +453,7 @@ X-Telegram-Init-Data: <initData>
 ### List My Locations
 ```http
 GET /api/locations/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 ```
 
 **Response:**
@@ -410,7 +479,7 @@ X-Telegram-Init-Data: <initData>
 ### Create Location
 ```http
 POST /api/locations/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -425,7 +494,7 @@ Content-Type: application/json
 ### Update Location
 ```http
 PATCH /api/locations/1/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
 {
@@ -437,32 +506,39 @@ Content-Type: application/json
 ### Delete Location
 ```http
 DELETE /api/locations/1/
-X-Telegram-Init-Data: <initData>
+Authorization: Bearer <access_token>
 ```
 
 ---
 
 ## Testing with cURL
 
-### Test Buyer Registration
+### 1. Login via Telegram initData
 ```bash
 curl -X POST http://localhost:8000/api/telegram-auth/ \
   -H "Content-Type: application/json" \
-  -d '{
-    "telegram_id": 123456789,
-    "first_name": "Test",
-    "last_name": "User",
-    "phone": "+998901234567"
-  }'
+  -d '{"init_data": "<Telegram initData string>"}'
 ```
 
-### Test Store List
+### 2. Use JWT token for protected endpoints
+```bash
+# Save the access token from step 1
+TOKEN="eyJhbGciOiJIUzI1NiIs..."
+
+# Get my profile
+curl http://localhost:8000/api/me/ \
+  -H "Authorization: Bearer $TOKEN"
+
+# Create an order
+curl -X POST http://localhost:8000/api/orders/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"store": 1, "items": [{"product": 1, "quantity": 5}]}'
+```
+
+### 3. Test public endpoints (no auth needed)
 ```bash
 curl http://localhost:8000/api/stores/
-```
-
-### Test Product Search
-```bash
 curl "http://localhost:8000/api/search/?q=cement"
 ```
 
@@ -473,22 +549,22 @@ curl "http://localhost:8000/api/search/?q=cement"
 ### 400 Bad Request
 ```json
 {
-  "error": "Invalid data",
-  "details": { ... }
+  "error": "Invalid data"
 }
 ```
 
-### 401 Unauthorized
+### 401 Unauthorized (no token or invalid/expired token)
 ```json
 {
-  "error": "Telegram authentication required"
+  "detail": "Given token not valid for any token type",
+  "code": "token_not_valid"
 }
 ```
 
-### 403 Forbidden
+### 403 Forbidden (not a seller)
 ```json
 {
-  "error": "Not a seller"
+  "detail": "Only sellers can access this endpoint."
 }
 ```
 
@@ -535,3 +611,33 @@ Response format:
   "results": [...]
 }
 ```
+
+---
+
+## Endpoint Summary
+
+| Method | Endpoint | Auth | Role | Description |
+|--------|----------|------|------|-------------|
+| POST | `/api/telegram-auth/` | ❌ | — | Login via Telegram initData → JWT |
+| POST | `/api/token/refresh/` | ❌ | — | Refresh access token |
+| GET | `/api/me/` | ✅ | any | Get my profile |
+| GET | `/api/check-seller/` | ❌ | — | Check seller status |
+| GET | `/api/stores/` | ❌ | — | List stores |
+| GET | `/api/stores/{id}/categories/` | ❌ | — | Store categories |
+| GET | `/api/stores/{id}/products/` | ❌ | — | Store products |
+| GET | `/api/search/` | ❌ | — | Search products |
+| POST | `/api/orders/` | ✅ | any | Create order |
+| GET | `/api/locations/` | ✅ | any | List my locations |
+| POST | `/api/locations/` | ✅ | any | Create location |
+| PATCH | `/api/locations/{id}/` | ✅ | any | Update location |
+| DELETE | `/api/locations/{id}/` | ✅ | any | Delete location |
+| GET | `/api/seller/dashboard/` | ✅ | seller | Seller dashboard |
+| GET | `/api/seller/me/` | ✅ | seller | Seller profile |
+| GET | `/api/seller/orders/` | ✅ | seller | List store orders |
+| PATCH | `/api/seller/orders/{id}/` | ✅ | seller | Update order status |
+| POST | `/api/seller/products/` | ✅ | seller | Create product |
+| PATCH | `/api/seller/products/{id}/` | ✅ | seller | Update product |
+| GET | `/api/seller/locations/` | ✅ | seller | List store locations |
+| POST | `/api/seller/locations/` | ✅ | seller | Create store location |
+| PATCH | `/api/seller/locations/{id}/` | ✅ | seller | Update store location |
+| DELETE | `/api/seller/locations/{id}/` | ✅ | seller | Delete store location |

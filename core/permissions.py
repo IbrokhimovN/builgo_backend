@@ -1,6 +1,6 @@
 """
 Custom permissions for BuildGo Backend.
-All permissions assume telegram_id is available via middleware.
+All permissions use JWT-authenticated request.user.
 """
 
 from rest_framework import permissions
@@ -9,21 +9,15 @@ from .models import Seller
 
 class IsSeller(permissions.BasePermission):
     """
-    Permission to check if user is an active seller.
-    Requires telegram_id from middleware.
+    Permission to check if the authenticated user has role='seller'.
+    Requires JWT authentication.
     """
-    
+    message = 'Only sellers can access this endpoint.'
+
     def has_permission(self, request, view):
-        # Check if telegram_id is present
-        telegram_id = getattr(request, 'telegram_user_id', None)
-        if not telegram_id:
+        if not request.user or not request.user.is_authenticated:
             return False
-        
-        # Check if user is an active seller
-        return Seller.objects.filter(
-            user__telegram_id=telegram_id,
-            is_active=True
-        ).exists()
+        return request.user.role == 'seller'
 
 
 class IsStoreOwner(permissions.BasePermission):
@@ -31,22 +25,21 @@ class IsStoreOwner(permissions.BasePermission):
     Permission to check if seller owns the store related to the object.
     Used for product/order updates.
     """
-    
+
     def has_object_permission(self, request, view, obj):
-        telegram_id = getattr(request, 'telegram_user_id', None)
-        if not telegram_id:
+        if not request.user or not request.user.is_authenticated:
             return False
-        
+
         try:
             seller = Seller.objects.get(
-                user__telegram_id=telegram_id,
+                user=request.user,
                 is_active=True
             )
-            
+
             # Check if object's store matches seller's store
             if hasattr(obj, 'store'):
                 return obj.store == seller.store
-            
+
             return False
         except Seller.DoesNotExist:
             return False

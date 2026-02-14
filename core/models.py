@@ -1,32 +1,67 @@
 """
 Core models for BuildGo Backend.
-All models use telegram_id for authentication (no JWT, no passwords).
+Custom User model extending AbstractUser for JWT authentication.
+Authentication is via Telegram Mini App initData → JWT tokens.
 """
 
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
 
-class User(models.Model):
+class UserManager(BaseUserManager):
     """
-    User model based on Telegram identity.
-    No password field - authentication is via Telegram Mini App initData.
+    Custom manager for User model with telegram_id as USERNAME_FIELD.
+    """
+    def create_user(self, telegram_id, first_name='', password=None, **extra_fields):
+        if not telegram_id:
+            raise ValueError('telegram_id is required')
+        extra_fields.setdefault('is_active', True)
+        user = self.model(
+            telegram_id=telegram_id,
+            first_name=first_name,
+            **extra_fields
+        )
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, telegram_id, first_name='Admin', password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('role', 'seller')
+        return self.create_user(telegram_id, first_name, password, **extra_fields)
+
+
+class User(AbstractUser):
+    """
+    Custom User model based on Telegram identity.
+    Extends AbstractUser for SimpleJWT compatibility.
+    USERNAME_FIELD is telegram_id — login by Telegram ID.
     """
     ROLE_CHOICES = [
         ('buyer', 'Buyer'),
         ('seller', 'Seller'),
     ]
-    
+
     telegram_id = models.BigIntegerField(unique=True, db_index=True)
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
-    phone = models.CharField(max_length=20)
+    phone = models.CharField(max_length=20, blank=True, default='')
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='buyer')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+
+    # Override username — not used for Telegram auth, but required by AbstractUser
+    username = models.CharField(max_length=150, blank=True, null=True, unique=True)
+
+    objects = UserManager()
+
+    USERNAME_FIELD = 'telegram_id'
+    REQUIRED_FIELDS = ['first_name']
 
     class Meta:
         db_table = 'users'
-        ordering = ['-created_at']
+        ordering = ['-date_joined']
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} (@{self.telegram_id})"
@@ -108,7 +143,7 @@ class Product(models.Model):
         ('kg', 'KG'),
         ('m', 'Metr'),
     ]
-    
+
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
@@ -145,7 +180,7 @@ class Order(models.Model):
         ('new', 'New'),
         ('done', 'Done'),
     ]
-    
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -201,7 +236,7 @@ class Location(models.Model):
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     address = models.TextField()
-    
+
     # For customer locations
     user = models.ForeignKey(
         User,
@@ -210,7 +245,7 @@ class Location(models.Model):
         null=True,
         blank=True
     )
-    
+
     # For seller/store locations
     store = models.ForeignKey(
         Store,
@@ -219,7 +254,7 @@ class Location(models.Model):
         null=True,
         blank=True
     )
-    
+
     is_default = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
