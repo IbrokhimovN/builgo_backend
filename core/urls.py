@@ -1,23 +1,17 @@
 """
 URL configuration for core app.
+No auth endpoints. No JWT token refresh.
 """
 
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 urlpatterns = [
-    # Authentication
-    path('telegram-auth/', views.TelegramAuthView.as_view(), name='telegram-auth'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    # Customer
+    path('customers/', views.CustomerCreateView.as_view(), name='customer-create'),
 
-    # User profile
-    path('me/', views.MeView.as_view(), name='me'),
+    # Seller check
     path('check-seller/', views.CheckSellerView.as_view(), name='check-seller'),
-    path('seller/me/', views.SellerMeView.as_view(), name='seller-me'),
-
-    # Seller dashboard
-    path('seller/dashboard/', views.SellerDashboardView.as_view(), name='seller-dashboard'),
 
     # Buyer endpoints
     path('stores/', views.StoreListView.as_view(), name='store-list'),

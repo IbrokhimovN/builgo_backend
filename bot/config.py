@@ -13,5 +13,5 @@ MINI_APP_URL = os.getenv('MINI_APP_URL')
 
 # Backend API configuration
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
-TELEGRAM_AUTH_ENDPOINT = f'{BACKEND_URL}/api/telegram-auth/'
+CUSTOMER_ENDPOINT = f'{BACKEND_URL}/api/customers/'
 CHECK_SELLER_ENDPOINT = f'{BACKEND_URL}/api/check-seller/'

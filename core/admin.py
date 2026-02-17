@@ -1,39 +1,19 @@
 """
 Django admin configuration for BuildGo Backend.
-Uses custom UserAdmin for AbstractUser-based User model.
+No User model. Customer + Seller are standalone models.
 """
 
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Store, Seller, Category, Product, Order, OrderItem, Location
+from .models import Customer, Store, Seller, Category, Product, Order, OrderItem, Location
 
 
-@admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    """
-    Custom admin for User model (extends AbstractUser).
-    Role is editable in admin — this is how buyers get promoted to sellers.
-    """
-    list_display = ['telegram_id', 'first_name', 'last_name', 'phone', 'role', 'is_active', 'date_joined']
-    list_filter = ['role', 'is_active', 'date_joined']
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    list_display = ['telegram_id', 'first_name', 'last_name', 'phone', 'created_at']
+    list_filter = ['created_at']
     search_fields = ['telegram_id', 'first_name', 'last_name', 'phone']
-    ordering = ['-date_joined']
-
-    # Override fieldsets to show our custom fields
-    fieldsets = (
-        (None, {'fields': ('telegram_id',)}),
-        ('Personal Info', {'fields': ('first_name', 'last_name', 'phone')}),
-        ('Role', {'fields': ('role',)}),
-        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
-        ('Important dates', {'fields': ('last_login', 'date_joined')}),
-    )
-
-    add_fieldsets = (
-        (None, {
-            'classes': ('wide',),
-            'fields': ('telegram_id', 'first_name', 'last_name', 'role', 'password1', 'password2'),
-        }),
-    )
+    ordering = ['-created_at']
+    readonly_fields = ['created_at']
 
 
 @admin.register(Store)
@@ -46,11 +26,15 @@ class StoreAdmin(admin.ModelAdmin):
 
 @admin.register(Seller)
 class SellerAdmin(admin.ModelAdmin):
-    list_display = ['user', 'store', 'is_active', 'created_at']
+    """
+    Seller is created ONLY from Django Admin.
+    Admin enters telegram_id + name + store.
+    """
+    list_display = ['telegram_id', 'name', 'store', 'is_active', 'created_at']
     list_filter = ['is_active', 'created_at']
-    search_fields = ['user__first_name', 'user__last_name', 'store__name']
+    search_fields = ['telegram_id', 'name', 'store__name']
     readonly_fields = ['created_at']
-    raw_id_fields = ['user', 'store']
+    raw_id_fields = ['store']
 
 
 @admin.register(Category)
@@ -80,11 +64,11 @@ class OrderItemInline(admin.TabularInline):
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ['id', 'user', 'store', 'status', 'created_at']
+    list_display = ['id', 'customer', 'store', 'status', 'created_at']
     list_filter = ['status', 'created_at']
-    search_fields = ['user__first_name', 'user__last_name', 'store__name']
+    search_fields = ['customer__first_name', 'customer__last_name', 'customer__telegram_id', 'store__name']
     readonly_fields = ['created_at', 'updated_at']
-    raw_id_fields = ['user', 'store']
+    raw_id_fields = ['customer', 'store']
     inlines = [OrderItemInline]
 
 
@@ -98,8 +82,8 @@ class OrderItemAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'user', 'store', 'address', 'is_default', 'created_at']
+    list_display = ['name', 'customer', 'store', 'address', 'is_default', 'created_at']
     list_filter = ['is_default', 'created_at']
-    search_fields = ['name', 'address', 'user__first_name', 'user__last_name', 'store__name']
+    search_fields = ['name', 'address', 'customer__first_name', 'customer__last_name', 'store__name']
     readonly_fields = ['created_at', 'updated_at']
-    raw_id_fields = ['user', 'store']
+    raw_id_fields = ['customer', 'store']

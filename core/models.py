@@ -1,75 +1,34 @@
 """
 Core models for BuildGo Backend.
-Custom User model extending AbstractUser for JWT authentication.
-Authentication is via Telegram Mini App initData → JWT tokens.
+Telegram-only identity: Customer (data) + Seller (admin-controlled).
+NO Django User model. NO authentication.
 """
 
-from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
 
-class UserManager(BaseUserManager):
+class Customer(models.Model):
     """
-    Custom manager for User model with telegram_id as USERNAME_FIELD.
+    Customer model — data only, NOT auth.
+    Created by Telegram bot when buyer registers.
     """
-    def create_user(self, telegram_id, first_name='', password=None, **extra_fields):
-        if not telegram_id:
-            raise ValueError('telegram_id is required')
-        extra_fields.setdefault('is_active', True)
-        user = self.model(
-            telegram_id=telegram_id,
-            first_name=first_name,
-            **extra_fields
-        )
-        if password:
-            user.set_password(password)
-        else:
-            user.set_unusable_password()
-        user.save(using=self._db)
-        return user
-
-    def create_superuser(self, telegram_id, first_name='Admin', password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        extra_fields.setdefault('is_active', True)
-        extra_fields.setdefault('role', 'seller')
-        return self.create_user(telegram_id, first_name, password, **extra_fields)
-
-
-class User(AbstractUser):
-    """
-    Custom User model based on Telegram identity.
-    Extends AbstractUser for SimpleJWT compatibility.
-    USERNAME_FIELD is telegram_id — login by Telegram ID.
-    """
-    ROLE_CHOICES = [
-        ('buyer', 'Buyer'),
-        ('seller', 'Seller'),
-    ]
-
     telegram_id = models.BigIntegerField(unique=True, db_index=True)
+    first_name = models.CharField(max_length=150, blank=True, default='')
+    last_name = models.CharField(max_length=150, blank=True, default='')
     phone = models.CharField(max_length=20, blank=True, default='')
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='buyer')
-
-    # Override username — not used for Telegram auth, but required by AbstractUser
-    username = models.CharField(max_length=150, blank=True, null=True, unique=True)
-
-    objects = UserManager()
-
-    USERNAME_FIELD = 'telegram_id'
-    REQUIRED_FIELDS = ['first_name']
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = 'users'
-        ordering = ['-date_joined']
+        db_table = 'customers'
+        ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.first_name} {self.last_name} (@{self.telegram_id})"
+        return f"{self.first_name} {self.last_name} ({self.telegram_id})"
 
 
 class Store(models.Model):
     """
-    Store model - represents a seller's store.
+    Store model — represents a seller's store.
     """
     name = models.CharField(max_length=200)
     image = models.ImageField(upload_to='stores/', null=True, blank=True)
@@ -87,15 +46,13 @@ class Store(models.Model):
 
 class Seller(models.Model):
     """
-    Seller profile - links a User to a Store.
-    One user can be a seller for one store (OneToOne).
-    Multiple sellers can work for the same store (if needed in future).
+    Seller model — admin-controlled ONLY.
+    Created exclusively via Django Admin.
+    NOT linked to Customer. NOT linked to User.
+    Identity = telegram_id.
     """
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name='seller_profile'
-    )
+    telegram_id = models.BigIntegerField(unique=True, db_index=True)
+    name = models.CharField(max_length=150)
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
@@ -109,12 +66,12 @@ class Seller(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.user.first_name} - {self.store.name}"
+        return f"{self.name} - {self.store.name}"
 
 
 class Category(models.Model):
     """
-    Product category - scoped to a specific store.
+    Product category — scoped to a specific store.
     """
     name = models.CharField(max_length=100)
     store = models.ForeignKey(
@@ -135,7 +92,7 @@ class Category(models.Model):
 
 class Product(models.Model):
     """
-    Product model - belongs to a store and optionally a category.
+    Product model — belongs to a store and optionally a category.
     """
     UNIT_CHOICES = [
         ('qop', 'Qop'),
@@ -174,15 +131,16 @@ class Product(models.Model):
 
 class Order(models.Model):
     """
-    Order model - buyer places order at a store.
+    Order model — customer places order at a store.
+    References Customer (NOT User). Seller never referenced.
     """
     STATUS_CHOICES = [
         ('new', 'New'),
         ('done', 'Done'),
     ]
 
-    user = models.ForeignKey(
-        User,
+    customer = models.ForeignKey(
+        Customer,
         on_delete=models.CASCADE,
         related_name='orders'
     )
@@ -200,12 +158,12 @@ class Order(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"Order #{self.id} - {self.user.first_name} @ {self.store.name}"
+        return f"Order #{self.id} - {self.customer.first_name} @ {self.store.name}"
 
 
 class OrderItem(models.Model):
     """
-    Order item - products in an order.
+    Order item — products in an order.
     """
     order = models.ForeignKey(
         Order,
@@ -217,7 +175,7 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE
     )
     quantity = models.PositiveIntegerField()
-    price_at_order = models.DecimalField(max_digits=10, decimal_places=2)  # Store price snapshot
+    price_at_order = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
         db_table = 'order_items'
@@ -228,25 +186,22 @@ class OrderItem(models.Model):
 
 class Location(models.Model):
     """
-    Location model for customers (users) and sellers (stores).
-    - Customer location: user is set, store is null
-    - Seller/Store location: store is set, user is null
+    Location model for customers and stores.
+    - Customer location: customer is set, store is null
+    - Store location: store is set, customer is null
     """
-    name = models.CharField(max_length=100)  # e.g., "Home", "Office", "Warehouse"
+    name = models.CharField(max_length=100)
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     address = models.TextField()
 
-    # For customer locations
-    user = models.ForeignKey(
-        User,
+    customer = models.ForeignKey(
+        Customer,
         on_delete=models.CASCADE,
         related_name='locations',
         null=True,
         blank=True
     )
-
-    # For seller/store locations
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
@@ -264,14 +219,13 @@ class Location(models.Model):
         ordering = ['-is_default', '-created_at']
 
     def __str__(self):
-        owner = self.user or self.store
+        owner = self.customer or self.store
         return f"{self.name} - {owner}"
 
     def save(self, *args, **kwargs):
-        # Ensure only one default location per user/store
         if self.is_default:
-            if self.user:
-                Location.objects.filter(user=self.user, is_default=True).update(is_default=False)
+            if self.customer:
+                Location.objects.filter(customer=self.customer, is_default=True).update(is_default=False)
             elif self.store:
                 Location.objects.filter(store=self.store, is_default=True).update(is_default=False)
         super().save(*args, **kwargs)

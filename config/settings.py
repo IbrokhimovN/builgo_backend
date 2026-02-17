@@ -1,9 +1,9 @@
 """
 Django settings for BuildGo Backend (Production – DigitalOcean)
+No Django User model. No JWT. No auth middleware.
 """
 
 import os
-from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -22,7 +22,7 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
 
-CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+CSRF_TRUSTED_ORIGINS = [o for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 
 # ======================
 # APPLICATIONS
@@ -38,7 +38,6 @@ INSTALLED_APPS = [
 
     # Third party
     'rest_framework',
-    'rest_framework_simplejwt',
     'corsheaders',
 
     # Local
@@ -47,9 +46,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
-
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -94,10 +92,10 @@ DATABASES = {
 }
 
 # ======================
-# CUSTOM USER MODEL
+# NO CUSTOM USER MODEL
 # ======================
-
-AUTH_USER_MODEL = 'core.User'
+# AUTH_USER_MODEL is NOT set — we don't use Django User.
+# Django's default auth.User is kept only for admin login.
 
 # ======================
 # INTERNATIONALIZATION
@@ -126,12 +124,13 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ======================
-# DRF + JWT
+# DRF — NO AUTH
 # ======================
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
@@ -140,26 +139,16 @@ REST_FRAMEWORK = {
     ],
 }
 
-SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': False,
-    'AUTH_HEADER_TYPES': ('Bearer',),
-    'USER_ID_FIELD': 'id',
-    'USER_ID_CLAIM': 'user_id',
-}
-
 # ======================
 # CORS
 # ======================
 
 CORS_ALLOW_ALL_ORIGINS = False
 
-CORS_ALLOWED_ORIGINS = os.getenv(
+CORS_ALLOWED_ORIGINS = [o for o in os.getenv(
     "CORS_ALLOWED_ORIGINS",
     ""
-).split(",")
+).split(",") if o]
 
 CORS_ALLOW_CREDENTIALS = True
 

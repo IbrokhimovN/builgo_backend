@@ -1,29 +1,22 @@
 """
 DRF Serializers for BuildGo Backend.
+No User model. No auth. telegram_id is identity.
 """
 
 from rest_framework import serializers
 from .models import (
-    User, Store, Seller, Category, Product, Order, OrderItem, Location
+    Customer, Store, Seller, Category, Product, Order, OrderItem, Location
 )
 
 
-class UserSerializer(serializers.ModelSerializer):
+class CustomerSerializer(serializers.ModelSerializer):
     """
-    User profile serializer.
+    Customer serializer.
     """
     class Meta:
-        model = User
-        fields = ['id', 'telegram_id', 'first_name', 'last_name', 'phone', 'role', 'date_joined']
-        read_only_fields = ['id', 'date_joined']
-
-
-class TelegramAuthSerializer(serializers.Serializer):
-    """
-    Serializer for Telegram Mini App authentication.
-    Accepts raw initData string from Telegram WebApp.
-    """
-    init_data = serializers.CharField()
+        model = Customer
+        fields = ['id', 'telegram_id', 'first_name', 'last_name', 'phone', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -91,26 +84,27 @@ class OrderSerializer(serializers.ModelSerializer):
     Order serializer with items.
     """
     items = OrderItemSerializer(many=True, read_only=True)
-    user_name = serializers.SerializerMethodField()
+    customer_name = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True)
 
     class Meta:
         model = Order
         fields = [
-            'id', 'user', 'user_name', 'store', 'store_name',
+            'id', 'customer', 'customer_name', 'store', 'store_name',
             'status', 'items', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'user_name', 'store_name']
+        read_only_fields = ['id', 'customer', 'created_at', 'updated_at', 'customer_name', 'store_name']
 
-    def get_user_name(self, obj):
-        return f"{obj.user.first_name} {obj.user.last_name}"
+    def get_customer_name(self, obj):
+        return f"{obj.customer.first_name} {obj.customer.last_name}"
 
 
 class OrderCreateSerializer(serializers.Serializer):
     """
     Serializer for creating orders.
-    Accepts store_id and list of items.
+    Accepts telegram_id, store_id and list of items.
     """
+    telegram_id = serializers.IntegerField()
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
     items = serializers.ListField(
         child=serializers.DictField(),
@@ -133,13 +127,19 @@ class OrderCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         """Create order with items."""
-        user = validated_data['user']  # Injected in view
+        telegram_id = validated_data['telegram_id']
         store = validated_data['store']
         items_data = validated_data.pop('items')
 
+        # Get or create customer
+        customer, _ = Customer.objects.get_or_create(
+            telegram_id=telegram_id,
+            defaults={'first_name': '', 'last_name': ''}
+        )
+
         # Create order
         order = Order.objects.create(
-            user=user,
+            customer=customer,
             store=store,
             status='new'
         )
@@ -151,7 +151,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 order=order,
                 product=product,
                 quantity=item_data['quantity'],
-                price_at_order=product.price  # Snapshot current price
+                price_at_order=product.price
             )
 
         return order
@@ -161,12 +161,11 @@ class SellerSerializer(serializers.ModelSerializer):
     """
     Seller profile serializer.
     """
-    user = UserSerializer(read_only=True)
     store = StoreSerializer(read_only=True)
 
     class Meta:
         model = Seller
-        fields = ['id', 'user', 'store', 'is_active', 'created_at']
+        fields = ['id', 'telegram_id', 'name', 'store', 'is_active', 'created_at']
         read_only_fields = ['id', 'created_at']
 
 
@@ -174,28 +173,28 @@ class LocationSerializer(serializers.ModelSerializer):
     """
     Location serializer for reading location details.
     """
-    user_name = serializers.SerializerMethodField()
+    customer_name = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
 
     class Meta:
         model = Location
         fields = [
             'id', 'name', 'latitude', 'longitude', 'address',
-            'user', 'user_name', 'store', 'store_name',
+            'customer', 'customer_name', 'store', 'store_name',
             'is_default', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'user_name', 'store_name']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'customer_name', 'store_name']
 
-    def get_user_name(self, obj):
-        if obj.user:
-            return f"{obj.user.first_name} {obj.user.last_name}"
+    def get_customer_name(self, obj):
+        if obj.customer:
+            return f"{obj.customer.first_name} {obj.customer.last_name}"
         return None
 
 
 class LocationCreateSerializer(serializers.ModelSerializer):
     """
     Serializer for creating/updating locations.
-    User or store is auto-assigned based on context.
+    Customer or store is auto-assigned based on context.
     """
     class Meta:
         model = Location
