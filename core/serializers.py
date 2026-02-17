@@ -3,20 +3,28 @@ DRF Serializers for BuildGo Backend.
 No User model. No auth. telegram_id is identity.
 """
 
+import logging
+from django.db import transaction
 from rest_framework import serializers
 from .models import (
     Customer, Store, Seller, Category, Product, Order, OrderItem, Location
 )
 
+logger = logging.getLogger(__name__)
+
 
 class CustomerSerializer(serializers.ModelSerializer):
     """
     Customer serializer.
+    telegram_id is write_only — never exposed in responses.
     """
     class Meta:
         model = Customer
         fields = ['id', 'telegram_id', 'first_name', 'last_name', 'phone', 'created_at']
         read_only_fields = ['id', 'created_at']
+        extra_kwargs = {
+            'telegram_id': {'write_only': True},
+        }
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -65,6 +73,21 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         fields = ['id', 'category', 'name', 'price', 'unit', 'image', 'is_available']
         read_only_fields = ['id']
 
+    def validate_price(self, value):
+        """Price must be positive."""
+        if value <= 0:
+            raise serializers.ValidationError("Price must be greater than 0")
+        return value
+
+    def validate_name(self, value):
+        """Strip whitespace and enforce length."""
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Product name cannot be empty")
+        if len(value) > 200:
+            raise serializers.ValidationError("Product name too long (max 200 chars)")
+        return value
+
 
 class OrderItemSerializer(serializers.ModelSerializer):
     """
@@ -99,59 +122,78 @@ class OrderSerializer(serializers.ModelSerializer):
         return f"{obj.customer.first_name} {obj.customer.last_name}"
 
 
+class OrderItemInputSerializer(serializers.Serializer):
+    """
+    Typed serializer for order item input.
+    Replaces untyped DictField for proper validation.
+    """
+    product = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
 class OrderCreateSerializer(serializers.Serializer):
     """
     Serializer for creating orders.
     Accepts telegram_id, store_id and list of items.
     """
-    telegram_id = serializers.IntegerField()
+    telegram_id = serializers.IntegerField(min_value=1)
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
-    items = serializers.ListField(
-        child=serializers.DictField(),
-        write_only=True
-    )
+    items = OrderItemInputSerializer(many=True)
 
     def validate_items(self, items):
-        """Validate that items list is not empty and has required fields."""
+        """Validate that items list is not empty."""
         if not items:
             raise serializers.ValidationError("Order must have at least one item")
-
-        for item in items:
-            if 'product' not in item or 'quantity' not in item:
-                raise serializers.ValidationError("Each item must have 'product' and 'quantity'")
-
-            if item['quantity'] <= 0:
-                raise serializers.ValidationError("Quantity must be greater than 0")
-
         return items
 
     def create(self, validated_data):
-        """Create order with items."""
+        """
+        Create order with items.
+        Atomic: either all items are created or none.
+        Validates each product exists, belongs to the store, and is available.
+        """
         telegram_id = validated_data['telegram_id']
         store = validated_data['store']
-        items_data = validated_data.pop('items')
+        items_data = validated_data['items']
 
-        # Get or create customer
-        customer, _ = Customer.objects.get_or_create(
-            telegram_id=telegram_id,
-            defaults={'first_name': '', 'last_name': ''}
-        )
+        with transaction.atomic():
+            # Get or create customer (race-condition safe via unique constraint)
+            customer, _ = Customer.objects.get_or_create(
+                telegram_id=telegram_id,
+                defaults={'first_name': '', 'last_name': ''}
+            )
 
-        # Create order
-        order = Order.objects.create(
-            customer=customer,
-            store=store,
-            status='new'
-        )
+            # Create order
+            order = Order.objects.create(
+                customer=customer,
+                store=store,
+                status='new'
+            )
 
-        # Create order items
-        for item_data in items_data:
-            product = Product.objects.get(id=item_data['product'])
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                quantity=item_data['quantity'],
-                price_at_order=product.price
+            # Validate and create order items
+            for item_data in items_data:
+                try:
+                    product = Product.objects.get(
+                        id=item_data['product'],
+                        store=store,
+                        is_available=True
+                    )
+                except Product.DoesNotExist:
+                    raise serializers.ValidationError(
+                        f"Product {item_data['product']} not found, "
+                        f"unavailable, or does not belong to this store"
+                    )
+
+                OrderItem.objects.create(
+                    order=order,
+                    product=product,
+                    quantity=item_data['quantity'],
+                    price_at_order=product.price
+                )
+
+            logger.info(
+                "Order #%d created: customer=%d, store=%s, items=%d",
+                order.id, telegram_id, store.name, len(items_data)
             )
 
         return order

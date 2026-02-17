@@ -7,18 +7,134 @@ http://localhost:8000
 
 ## Authentication
 
-**None.** All endpoints are public. Identity is determined by `telegram_id` parameter.
+Two authentication methods. **Public endpoints** (stores, categories, products, search) require no auth.
 
-- **Buyer endpoints**: pass `telegram_id` in request body or query param
-- **Seller endpoints**: pass `telegram_id` in request body or query param — backend verifies seller status
+### 1. Mini App — Telegram initData (HMAC-SHA256)
+
+All authenticated endpoints from the Mini App must send the raw `initData` string in a header:
+
+```http
+X-Telegram-Init-Data: <window.Telegram.WebApp.initData>
+```
+
+The backend verifies the HMAC signature using the bot token and extracts `telegram_id` from the verified payload. **`telegram_id` in request body/query is ignored** when this header is present.
+
+### 2. Bot → API — Shared Secret
+
+The Telegram bot authenticates via a shared secret header:
+
+```http
+X-Bot-Secret: <BOT_API_SECRET>
+```
+
+Bot still passes `telegram_id` in query params or request body — the backend trusts it because the bot is verified by the shared secret.
 
 ---
 
-## Customer Endpoint
+## Public Endpoints (No Auth)
+
+### List Stores
+```http
+GET /api/stores/
+```
+
+**Response (paginated):**
+```json
+{
+  "count": 10,
+  "next": "http://localhost:8000/api/stores/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "name": "Qurilish Materiallari",
+      "image": "/media/stores/store1.jpg",
+      "is_active": true,
+      "created_at": "2026-01-29T21:00:00Z"
+    }
+  ]
+}
+```
+
+### Get Store Categories
+```http
+GET /api/stores/1/categories/
+```
+
+**Response (paginated):**
+```json
+{
+  "count": 5,
+  "results": [
+    {
+      "id": 1,
+      "name": "Cement",
+      "store": 1
+    }
+  ]
+}
+```
+
+### Get Store Products
+```http
+GET /api/stores/1/products/
+GET /api/stores/1/products/?category=1
+```
+
+**Response (paginated):**
+```json
+{
+  "count": 20,
+  "results": [
+    {
+      "id": 1,
+      "store": 1,
+      "store_name": "Qurilish Materiallari",
+      "category": 1,
+      "category_name": "Cement",
+      "name": "Cement M400",
+      "price": "45000.00",
+      "unit": "qop",
+      "image": "/media/products/cement.jpg",
+      "is_available": true,
+      "created_at": "2026-01-29T21:00:00Z"
+    }
+  ]
+}
+```
+
+### Search Products
+```http
+GET /api/search/?q=cement
+```
+
+**Response (paginated):**
+```json
+{
+  "count": 3,
+  "results": [
+    {
+      "id": 1,
+      "name": "Cement M400",
+      "price": "45000.00",
+      "store_name": "Qurilish Materiallari",
+      "is_available": true,
+      ...
+    }
+  ]
+}
+```
+
+---
+
+## Customer Endpoints (Bot-Authenticated)
+
+> These endpoints require `X-Bot-Secret` header.
 
 ### Create / Update Customer
 ```http
 POST /api/customers/
+X-Bot-Secret: <secret>
 Content-Type: application/json
 
 {
@@ -33,7 +149,6 @@ Content-Type: application/json
 ```json
 {
   "id": 1,
-  "telegram_id": 123456789,
   "first_name": "John",
   "last_name": "Doe",
   "phone": "+998901234567",
@@ -41,13 +156,29 @@ Content-Type: application/json
 }
 ```
 
+> Note: `telegram_id` is NOT returned in responses (write-only).
+
+### Check Customer Exists
+```http
+GET /api/customers/check/?telegram_id=123456789
+X-Bot-Secret: <secret>
+```
+
+**Response:**
+```json
+{
+  "exists": true
+}
+```
+
 ---
 
-## Seller Check
+## Seller Check (Bot-Authenticated)
 
 ### Check Seller Status
 ```http
 GET /api/check-seller/?telegram_id=123456789
+X-Bot-Secret: <secret>
 ```
 
 **Response (is seller):**
@@ -80,81 +211,14 @@ GET /api/check-seller/?telegram_id=123456789
 
 ---
 
-## Buyer Endpoints
+## Order Endpoints (Authenticated)
 
-### List Stores
-```http
-GET /api/stores/
-```
-
-**Response:**
-```json
-{
-  "count": 10,
-  "next": "http://localhost:8000/api/stores/?page=2",
-  "previous": null,
-  "results": [
-    {
-      "id": 1,
-      "name": "Qurilish Materiallari",
-      "image": "/media/stores/store1.jpg",
-      "is_active": true,
-      "created_at": "2026-01-29T21:00:00Z"
-    }
-  ]
-}
-```
-
-### Get Store Categories
-```http
-GET /api/stores/1/categories/
-```
-
-**Response:**
-```json
-{
-  "count": 5,
-  "results": [
-    {
-      "id": 1,
-      "name": "Cement",
-      "store": 1
-    }
-  ]
-}
-```
-
-### Get Store Products
-```http
-GET /api/stores/1/products/
-GET /api/stores/1/products/?category=1
-```
-
-**Response:**
-```json
-{
-  "count": 20,
-  "results": [
-    {
-      "id": 1,
-      "store": 1,
-      "store_name": "Qurilish Materiallari",
-      "category": 1,
-      "category_name": "Cement",
-      "name": "Cement M400",
-      "price": "45000.00",
-      "unit": "qop",
-      "image": "/media/products/cement.jpg",
-      "is_available": true,
-      "created_at": "2026-01-29T21:00:00Z"
-    }
-  ]
-}
-```
+> Accept both `X-Telegram-Init-Data` (Mini App) and `X-Bot-Secret` (bot).
 
 ### Create Order
 ```http
 POST /api/orders/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
@@ -166,6 +230,11 @@ Content-Type: application/json
   ]
 }
 ```
+
+**Validation:**
+- Each product must exist, belong to the specified store, and be available
+- Order is created atomically (all-or-nothing)
+- `quantity` must be ≥ 1
 
 **Response (201 Created):**
 ```json
@@ -191,21 +260,24 @@ Content-Type: application/json
 }
 ```
 
-### Search Products
+### My Orders (Customer)
 ```http
-GET /api/search/?q=cement
+GET /api/orders/my/?telegram_id=123456789
+X-Telegram-Init-Data: <initData>
 ```
 
-**Response:**
+**Response (paginated):**
 ```json
 {
+  "count": 3,
   "results": [
     {
       "id": 1,
-      "name": "Cement M400",
-      "price": "45000.00",
+      "customer_name": "John Doe",
       "store_name": "Qurilish Materiallari",
-      ...
+      "status": "new",
+      "items": [...],
+      "created_at": "2026-01-29T21:00:00Z"
     }
   ]
 }
@@ -213,49 +285,55 @@ GET /api/search/?q=cement
 
 ---
 
-## Seller Endpoints
+## Seller Endpoints (Authenticated)
 
-> All seller endpoints require `telegram_id` parameter. Backend verifies the telegram_id belongs to an active seller.
+> All seller endpoints require auth. Backend verifies the `telegram_id` belongs to an active seller.
 
-### List Orders (Seller's Store Only)
+### List Orders (Seller's Store)
 ```http
-GET /api/seller/orders/?telegram_id=123456789
+GET /api/seller/orders/
+X-Telegram-Init-Data: <initData>
 ```
 
-**Response:**
+**Response (paginated):**
 ```json
-[
-  {
-    "id": 1,
-    "customer": 5,
-    "customer_name": "Customer Name",
-    "store": 1,
-    "store_name": "My Store",
-    "status": "new",
-    "items": [...],
-    "created_at": "2026-01-29T21:00:00Z"
-  }
-]
+{
+  "count": 15,
+  "results": [
+    {
+      "id": 1,
+      "customer": 5,
+      "customer_name": "Customer Name",
+      "store": 1,
+      "store_name": "My Store",
+      "status": "new",
+      "items": [...],
+      "created_at": "2026-01-29T21:00:00Z"
+    }
+  ]
+}
 ```
 
 ### Update Order Status
 ```http
 PATCH /api/seller/orders/1/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
-  "status": "done"
+  "status": "processing"
 }
 ```
+
+Valid statuses: `new`, `processing`, `done`, `cancelled`
 
 ### Create Product
 ```http
 POST /api/seller/products/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "category": 1,
   "name": "Cement M500",
   "price": "50000.00",
@@ -285,47 +363,38 @@ Content-Type: application/json
 ### Update Product
 ```http
 PATCH /api/seller/products/2/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "price": "52000.00",
   "is_available": false
 }
 ```
 
-### List Store Locations
+### Delete Product (Soft-Delete)
 ```http
-GET /api/seller/locations/?telegram_id=123456789
+DELETE /api/seller/products/2/
+X-Telegram-Init-Data: <initData>
 ```
 
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "name": "Warehouse",
-    "latitude": "41.311081",
-    "longitude": "69.240562",
-    "address": "Tashkent, Uzbekistan",
-    "customer": null,
-    "customer_name": null,
-    "store": 1,
-    "store_name": "My Store",
-    "is_default": true,
-    "created_at": "2026-02-05T12:00:00Z",
-    "updated_at": "2026-02-05T12:00:00Z"
-  }
-]
+> Sets `is_available = false` instead of hard delete (preserves order history).
+
+**Response:** `204 No Content`
+
+### List Store Locations
+```http
+GET /api/seller/locations/
+X-Telegram-Init-Data: <initData>
 ```
 
 ### Create Store Location
 ```http
 POST /api/seller/locations/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "name": "Warehouse",
   "latitude": 41.311081,
   "longitude": 69.240562,
@@ -337,55 +406,39 @@ Content-Type: application/json
 ### Update Store Location
 ```http
 PATCH /api/seller/locations/1/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "address": "Updated address"
 }
 ```
 
 ### Delete Store Location
 ```http
-DELETE /api/seller/locations/1/?telegram_id=123456789
+DELETE /api/seller/locations/1/
+X-Telegram-Init-Data: <initData>
 ```
+
+**Response:** `204 No Content`
 
 ---
 
-## Customer Location Endpoints
+## Customer Location Endpoints (Authenticated)
 
 ### List My Locations
 ```http
-GET /api/locations/?telegram_id=123456789
-```
-
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "name": "Home",
-    "latitude": "41.311081",
-    "longitude": "69.240562",
-    "address": "Tashkent, Uzbekistan",
-    "customer": 1,
-    "customer_name": "John Doe",
-    "store": null,
-    "store_name": null,
-    "is_default": true,
-    "created_at": "2026-02-05T12:00:00Z",
-    "updated_at": "2026-02-05T12:00:00Z"
-  }
-]
+GET /api/locations/
+X-Telegram-Init-Data: <initData>
 ```
 
 ### Create Location
 ```http
 POST /api/locations/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "name": "Home",
   "latitude": 41.311081,
   "longitude": 69.240562,
@@ -397,10 +450,10 @@ Content-Type: application/json
 ### Update Location
 ```http
 PATCH /api/locations/1/
+X-Telegram-Init-Data: <initData>
 Content-Type: application/json
 
 {
-  "telegram_id": 123456789,
   "name": "Office",
   "is_default": false
 }
@@ -408,34 +461,46 @@ Content-Type: application/json
 
 ### Delete Location
 ```http
-DELETE /api/locations/1/?telegram_id=123456789
+DELETE /api/locations/1/
+X-Telegram-Init-Data: <initData>
 ```
+
+**Response:** `204 No Content`
 
 ---
 
 ## Testing with cURL
 
-### 1. Create a customer
-```bash
-curl -X POST http://localhost:8000/api/customers/ \
-  -H "Content-Type: application/json" \
-  -d '{"telegram_id": 123456, "first_name": "Test", "last_name": "User", "phone": "+998901234567"}'
-```
-
-### 2. Check seller status
-```bash
-curl "http://localhost:8000/api/check-seller/?telegram_id=123456"
-```
-
-### 3. Browse stores and products
+### 1. Browse stores (public — no auth)
 ```bash
 curl http://localhost:8000/api/stores/
 curl "http://localhost:8000/api/search/?q=cement"
 ```
 
-### 4. Create an order
+### 2. Check seller (bot auth)
+```bash
+curl -H "X-Bot-Secret: YOUR_SECRET" \
+  "http://localhost:8000/api/check-seller/?telegram_id=123456"
+```
+
+### 3. Check customer exists (bot auth)
+```bash
+curl -H "X-Bot-Secret: YOUR_SECRET" \
+  "http://localhost:8000/api/customers/check/?telegram_id=123456"
+```
+
+### 4. Create customer (bot auth)
+```bash
+curl -X POST http://localhost:8000/api/customers/ \
+  -H "X-Bot-Secret: YOUR_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"telegram_id": 123456, "first_name": "Test", "last_name": "User", "phone": "+998901234567"}'
+```
+
+### 5. Create order (bot or initData auth)
 ```bash
 curl -X POST http://localhost:8000/api/orders/ \
+  -H "X-Bot-Secret: YOUR_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"telegram_id": 123456, "store": 1, "items": [{"product": 1, "quantity": 5}]}'
 ```
@@ -444,19 +509,39 @@ curl -X POST http://localhost:8000/api/orders/ \
 
 ## Error Responses
 
+### 401 Unauthorized (Missing/Invalid Auth)
+```json
+{
+  "detail": "Invalid initData signature"
+}
+```
+
 ### 400 Bad Request
 ```json
-{ "error": "telegram_id is required" }
+{
+  "error": "telegram_id is required"
+}
 ```
 
 ### 403 Forbidden (not a seller)
 ```json
-{ "error": "Not a seller" }
+{
+  "error": "Not a seller"
+}
 ```
 
 ### 404 Not Found
 ```json
-{ "error": "Product not found or access denied" }
+{
+  "error": "Product not found or access denied"
+}
+```
+
+### 429 Too Many Requests (Rate Limited)
+```json
+{
+  "detail": "Request was throttled. Expected available in 30 seconds."
+}
 ```
 
 ---
@@ -464,23 +549,25 @@ curl -X POST http://localhost:8000/api/orders/ \
 ## Field Enums
 
 ### Order Status
-- `new` - New order
-- `done` - Completed order
+- `new` — New order
+- `processing` — Being processed
+- `done` — Completed
+- `cancelled` — Cancelled
 
 ### Product Unit
-- `qop` - Qop (bag/pack)
-- `dona` - Dona (piece)
-- `kg` - Kilogram
-- `m` - Meter
+- `qop` — Qop (bag/pack)
+- `dona` — Dona (piece)
+- `kg` — Kilogram
+- `m` — Meter
 
 ---
 
 ## Pagination
 
-All list endpoints (via `generics.ListAPIView`) support pagination:
-- `?page=1` - First page
-- `?page=2` - Second page
-- Default page size: 20 items
+All list endpoints support pagination:
+- `?page=1` — First page
+- `?page=2` — Second page
+- Default page size: **20** items
 
 Response format:
 ```json
@@ -494,26 +581,39 @@ Response format:
 
 ---
 
+## Rate Limiting
+
+- Anonymous requests: **30/minute**
+- Exceeding the limit returns `429 Too Many Requests`
+
+---
+
 ## Endpoint Summary
 
-| Method | Endpoint | Identity | Description |
-|--------|----------|----------|-------------|
-| POST | `/api/customers/` | body: `telegram_id` | Create/update customer |
-| GET | `/api/check-seller/` | query: `telegram_id` | Check seller status |
-| GET | `/api/stores/` | — | List stores |
-| GET | `/api/stores/{id}/categories/` | — | Store categories |
-| GET | `/api/stores/{id}/products/` | — | Store products |
-| GET | `/api/search/` | — | Search products |
-| POST | `/api/orders/` | body: `telegram_id` | Create order |
-| GET | `/api/locations/` | query: `telegram_id` | List customer locations |
-| POST | `/api/locations/` | body: `telegram_id` | Create customer location |
-| PATCH | `/api/locations/{id}/` | body: `telegram_id` | Update customer location |
-| DELETE | `/api/locations/{id}/` | query: `telegram_id` | Delete customer location |
-| GET | `/api/seller/orders/` | query: `telegram_id` | List store orders |
-| PATCH | `/api/seller/orders/{id}/` | body: `telegram_id` | Update order status |
-| POST | `/api/seller/products/` | body: `telegram_id` | Create product |
-| PATCH | `/api/seller/products/{id}/` | body: `telegram_id` | Update product |
-| GET | `/api/seller/locations/` | query: `telegram_id` | List store locations |
-| POST | `/api/seller/locations/` | body: `telegram_id` | Create store location |
-| PATCH | `/api/seller/locations/{id}/` | body: `telegram_id` | Update store location |
-| DELETE | `/api/seller/locations/{id}/` | query: `telegram_id` | Delete store location |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| **Public** | | | |
+| GET | `/api/stores/` | None | List active stores |
+| GET | `/api/stores/{id}/categories/` | None | Store categories |
+| GET | `/api/stores/{id}/products/` | None | Store products |
+| GET | `/api/search/?q=` | None | Search products |
+| **Bot-Authenticated** | | | |
+| POST | `/api/customers/` | Bot Secret | Create/update customer |
+| GET | `/api/customers/check/` | Bot Secret | Check customer exists |
+| GET | `/api/check-seller/` | Bot Secret | Check seller status |
+| **Authenticated (initData or Bot Secret)** | | |
+| POST | `/api/orders/` | initData / Bot | Create order |
+| GET | `/api/orders/my/` | initData / Bot | Customer order history |
+| GET | `/api/locations/` | initData / Bot | List customer locations |
+| POST | `/api/locations/` | initData / Bot | Create customer location |
+| PATCH | `/api/locations/{id}/` | initData / Bot | Update customer location |
+| DELETE | `/api/locations/{id}/` | initData / Bot | Delete customer location |
+| GET | `/api/seller/orders/` | initData / Bot | List store orders |
+| PATCH | `/api/seller/orders/{id}/` | initData / Bot | Update order status |
+| POST | `/api/seller/products/` | initData / Bot | Create product |
+| PATCH | `/api/seller/products/{id}/` | initData / Bot | Update product |
+| DELETE | `/api/seller/products/{id}/` | initData / Bot | Soft-delete product |
+| GET | `/api/seller/locations/` | initData / Bot | List store locations |
+| POST | `/api/seller/locations/` | initData / Bot | Create store location |
+| PATCH | `/api/seller/locations/{id}/` | initData / Bot | Update store location |
+| DELETE | `/api/seller/locations/{id}/` | initData / Bot | Delete store location |

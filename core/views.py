@@ -1,14 +1,27 @@
 """
 API Views for BuildGo Backend.
-No authentication. telegram_id is the single identity.
-All endpoints are public or use telegram_id for identification.
+
+Authentication:
+- Mini App requests: TelegramInitDataAuthentication (HMAC-SHA256)
+- Bot requests: BotSecretAuthentication (shared secret header)
+- Public endpoints: stores, categories, products, search (no auth required)
+
+Role logic is UNCHANGED. telegram_id resolution stays per-request.
 """
 
+import logging
+from django.db import IntegrityError
 from rest_framework import generics, status
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q
 
+from .authentication import (
+    TelegramInitDataAuthentication,
+    BotSecretAuthentication,
+    get_telegram_id,
+)
 from .models import Customer, Store, Seller, Category, Product, Order, Location
 from .serializers import (
     CustomerSerializer, StoreSerializer,
@@ -17,33 +30,132 @@ from .serializers import (
     LocationSerializer, LocationCreateSerializer
 )
 
+logger = logging.getLogger(__name__)
+
+# Valid order statuses for seller updates
+VALID_ORDER_STATUSES = {'new', 'processing', 'done', 'cancelled'}
+
 
 # ============================================
-# CUSTOMER ENDPOINTS
+# PUBLIC ENDPOINTS (no auth required)
+# ============================================
+
+class StoreListView(generics.ListAPIView):
+    """
+    GET /api/stores/
+    List all active stores. Public.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    queryset = Store.objects.filter(is_active=True)
+    serializer_class = StoreSerializer
+
+
+class StoreCategoriesView(generics.ListAPIView):
+    """
+    GET /api/stores/{id}/categories/
+    List categories for a specific store. Public.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    serializer_class = CategorySerializer
+
+    def get_queryset(self):
+        store_id = self.kwargs['store_id']
+        return Category.objects.filter(store_id=store_id)
+
+
+class StoreProductsView(generics.ListAPIView):
+    """
+    GET /api/stores/{id}/products/
+    GET /api/stores/{id}/products/?category=X
+    List products for a specific store. Public.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        store_id = self.kwargs['store_id']
+        queryset = Product.objects.filter(
+            store_id=store_id,
+            is_available=True
+        )
+        category_id = self.request.GET.get('category')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        return queryset
+
+
+class SearchProductsView(generics.ListAPIView):
+    """
+    GET /api/search/?q=cement
+    Search products across all stores. Public.
+    Paginated via DRF default pagination.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        query = self.request.GET.get('q', '').strip()
+        if not query:
+            return Product.objects.none()
+        return Product.objects.filter(
+            Q(name__icontains=query),
+            is_available=True,
+            store__is_active=True
+        )
+
+
+# ============================================
+# CUSTOMER ENDPOINTS (bot-authenticated)
 # ============================================
 
 class CustomerCreateView(APIView):
     """
     POST /api/customers/
     Create or update a Customer by telegram_id.
-    No auth required.
+    Called by bot after registration. Authenticated via BotSecret.
+    Race-condition safe with IntegrityError handling.
     """
+    authentication_classes = [BotSecretAuthentication]
 
     def post(self, request):
-        telegram_id = request.data.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
-            return Response(
-                {'error': 'telegram_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # Fallback: also accept from body for bot calls
+            telegram_id = request.data.get('telegram_id')
+            if not telegram_id:
+                return Response(
+                    {'error': 'telegram_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                telegram_id = int(telegram_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid telegram_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        customer, created = Customer.objects.update_or_create(
-            telegram_id=telegram_id,
-            defaults={
-                'first_name': request.data.get('first_name', ''),
-                'last_name': request.data.get('last_name', ''),
-                'phone': request.data.get('phone', ''),
-            }
+        try:
+            customer, created = Customer.objects.update_or_create(
+                telegram_id=telegram_id,
+                defaults={
+                    'first_name': request.data.get('first_name', ''),
+                    'last_name': request.data.get('last_name', ''),
+                    'phone': request.data.get('phone', ''),
+                }
+            )
+        except IntegrityError:
+            # Race condition: concurrent create — retry get
+            customer = Customer.objects.get(telegram_id=telegram_id)
+            created = False
+
+        logger.info(
+            "Customer %s: telegram_id=%s",
+            "created" if created else "updated", telegram_id
         )
 
         return Response(
@@ -52,24 +164,63 @@ class CustomerCreateView(APIView):
         )
 
 
+class CustomerCheckView(APIView):
+    """
+    GET /api/customers/check/?telegram_id=XXX
+    Check if customer exists. Used by bot for returning-customer flow.
+    Authenticated via BotSecret.
+    """
+    authentication_classes = [BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            telegram_id = request.GET.get('telegram_id')
+            if not telegram_id:
+                return Response(
+                    {'error': 'telegram_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                telegram_id = int(telegram_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid telegram_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        exists = Customer.objects.filter(telegram_id=telegram_id).exists()
+        return Response({'exists': exists})
+
+
 # ============================================
-# SELLER CHECK
+# SELLER CHECK (bot-authenticated)
 # ============================================
 
 class CheckSellerView(APIView):
     """
     GET /api/check-seller/?telegram_id=XXX
     Check if telegram_id belongs to an active seller.
-    No auth required.
+    Authenticated via BotSecret.
     """
+    authentication_classes = [BotSecretAuthentication]
 
     def get(self, request):
-        telegram_id = request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
-            return Response(
-                {'error': 'telegram_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            telegram_id = request.GET.get('telegram_id')
+            if not telegram_id:
+                return Response(
+                    {'error': 'telegram_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                telegram_id = int(telegram_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid telegram_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         try:
             seller = Seller.objects.select_related('store').get(
@@ -87,56 +238,15 @@ class CheckSellerView(APIView):
 
 
 # ============================================
-# BUYER ENDPOINTS
+# ORDER ENDPOINTS (authenticated)
 # ============================================
-
-class StoreListView(generics.ListAPIView):
-    """
-    GET /api/stores/
-    List all active stores.
-    """
-    queryset = Store.objects.filter(is_active=True)
-    serializer_class = StoreSerializer
-
-
-class StoreCategoriesView(generics.ListAPIView):
-    """
-    GET /api/stores/{id}/categories/
-    List categories for a specific store.
-    """
-    serializer_class = CategorySerializer
-
-    def get_queryset(self):
-        store_id = self.kwargs['store_id']
-        return Category.objects.filter(store_id=store_id)
-
-
-class StoreProductsView(generics.ListAPIView):
-    """
-    GET /api/stores/{id}/products/
-    GET /api/stores/{id}/products/?category=X
-    List products for a specific store, optionally filtered by category.
-    """
-    serializer_class = ProductSerializer
-
-    def get_queryset(self):
-        store_id = self.kwargs['store_id']
-        queryset = Product.objects.filter(
-            store_id=store_id,
-            is_available=True
-        )
-        category_id = self.request.GET.get('category')
-        if category_id:
-            queryset = queryset.filter(category_id=category_id)
-        return queryset
-
 
 class OrderCreateView(APIView):
     """
     POST /api/orders/
-    Create a new order. Accepts telegram_id in request body.
-    No auth required.
+    Create a new order. Authenticated via initData or BotSecret.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def post(self, request):
         serializer = OrderCreateSerializer(data=request.data)
@@ -149,34 +259,35 @@ class OrderCreateView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class SearchProductsView(APIView):
+class CustomerOrdersView(generics.ListAPIView):
     """
-    GET /api/search/?q=cement
-    Search products across all stores.
+    GET /api/orders/my/?telegram_id=XXX
+    List orders for a customer. Authenticated.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = OrderSerializer
 
-    def get(self, request):
-        query = request.GET.get('q', '').strip()
-        if not query:
-            return Response({'results': []})
-
-        products = Product.objects.filter(
-            Q(name__icontains=query),
-            is_available=True,
-            store__is_active=True
-        )[:50]
-
-        return Response({
-            'results': ProductSerializer(products, many=True).data
-        })
+    def get_queryset(self):
+        telegram_id = get_telegram_id(self.request)
+        if not telegram_id:
+            return Order.objects.none()
+        return Order.objects.filter(
+            customer__telegram_id=telegram_id
+        ).select_related('customer', 'store').prefetch_related('items__product')
 
 
 # ============================================
-# SELLER ENDPOINTS
+# SELLER HELPER
 # ============================================
 
 def _get_seller(telegram_id):
     """Helper: get active Seller by telegram_id or return None."""
+    if not telegram_id:
+        return None
+    try:
+        telegram_id = int(telegram_id)
+    except (ValueError, TypeError):
+        return None
     try:
         return Seller.objects.select_related('store').get(
             telegram_id=telegram_id,
@@ -186,33 +297,48 @@ def _get_seller(telegram_id):
         return None
 
 
-class SellerOrdersView(APIView):
+# ============================================
+# SELLER ENDPOINTS (authenticated via initData)
+# ============================================
+
+class SellerOrdersView(generics.ListAPIView):
     """
     GET /api/seller/orders/?telegram_id=XXX
-    List orders for seller's store.
+    List orders for seller's store. Paginated.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = OrderSerializer
 
-    def get(self, request):
-        telegram_id = request.GET.get('telegram_id')
+    def get_queryset(self):
+        telegram_id = get_telegram_id(self.request)
+        if not telegram_id:
+            return Order.objects.none()
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Order.objects.none()
+        return Order.objects.filter(
+            store=seller.store
+        ).select_related('customer', 'store').prefetch_related('items__product')
+
+    def list(self, request, *args, **kwargs):
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
         seller = _get_seller(telegram_id)
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
-
-        orders = Order.objects.filter(store=seller.store).select_related('customer', 'store')
-        return Response(OrderSerializer(orders, many=True).data)
+        return super().list(request, *args, **kwargs)
 
 
 class SellerOrderUpdateView(APIView):
     """
-    PATCH /api/seller/orders/{id}/?telegram_id=XXX
+    PATCH /api/seller/orders/{id}/
     Update order status (seller only).
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def patch(self, request, pk):
-        telegram_id = request.data.get('telegram_id') or request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -229,14 +355,20 @@ class SellerOrderUpdateView(APIView):
             )
 
         new_status = request.data.get('status')
-        if new_status not in ['new', 'done']:
+        if new_status not in VALID_ORDER_STATUSES:
             return Response(
-                {'error': 'Invalid status. Must be "new" or "done"'},
+                {'error': f'Invalid status. Must be one of: {", ".join(sorted(VALID_ORDER_STATUSES))}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         order.status = new_status
         order.save()
+
+        logger.info(
+            "Order #%d status changed to '%s' by seller telegram_id=%s",
+            order.id, new_status, telegram_id
+        )
+
         return Response(OrderSerializer(order).data)
 
 
@@ -244,11 +376,11 @@ class SellerProductCreateView(APIView):
     """
     POST /api/seller/products/
     Create product (seller only). Store is auto-assigned.
-    telegram_id required in request body.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def post(self, request):
-        telegram_id = request.data.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -259,6 +391,10 @@ class SellerProductCreateView(APIView):
         serializer = ProductCreateSerializer(data=request.data)
         if serializer.is_valid():
             product = serializer.save(store=seller.store)
+            logger.info(
+                "Product '%s' created in store '%s' by seller telegram_id=%s",
+                product.name, seller.store.name, telegram_id
+            )
             return Response(
                 ProductSerializer(product).data,
                 status=status.HTTP_201_CREATED
@@ -269,12 +405,13 @@ class SellerProductCreateView(APIView):
 class SellerProductUpdateView(APIView):
     """
     PATCH /api/seller/products/{id}/
-    Update product (seller only, only their own products).
-    telegram_id required in request body or query param.
+    DELETE /api/seller/products/{id}/
+    Update or delete product (seller only).
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def patch(self, request, pk):
-        telegram_id = request.data.get('telegram_id') or request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -292,13 +429,42 @@ class SellerProductUpdateView(APIView):
 
         serializer = ProductCreateSerializer(product, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
-            return Response(ProductSerializer(product).data)
+            updated = serializer.save()
+            return Response(ProductSerializer(updated).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        """
+        Soft-delete: marks product as unavailable instead of hard delete.
+        Prevents ProtectedError from OrderItem FK.
+        """
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            product = Product.objects.get(pk=pk, store=seller.store)
+        except Product.DoesNotExist:
+            return Response(
+                {'error': 'Product not found or access denied'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        product.is_available = False
+        product.save(update_fields=['is_available', 'updated_at'])
+        logger.info(
+            "Product '%s' (id=%d) deactivated by seller telegram_id=%s",
+            product.name, product.id, telegram_id
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ============================================
-# CUSTOMER LOCATION ENDPOINTS
+# CUSTOMER LOCATION ENDPOINTS (authenticated)
 # ============================================
 
 class CustomerLocationListCreateView(APIView):
@@ -307,9 +473,10 @@ class CustomerLocationListCreateView(APIView):
     POST /api/locations/
     List and create customer locations.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def get(self, request):
-        telegram_id = request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -322,7 +489,7 @@ class CustomerLocationListCreateView(APIView):
         return Response(LocationSerializer(locations, many=True).data)
 
     def post(self, request):
-        telegram_id = request.data.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -347,9 +514,10 @@ class CustomerLocationDetailView(APIView):
     DELETE /api/locations/{id}/
     Update or delete a customer location.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def patch(self, request, pk):
-        telegram_id = request.data.get('telegram_id') or request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -366,7 +534,7 @@ class CustomerLocationDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        telegram_id = request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -381,7 +549,7 @@ class CustomerLocationDetailView(APIView):
 
 
 # ============================================
-# SELLER LOCATION ENDPOINTS
+# SELLER LOCATION ENDPOINTS (authenticated)
 # ============================================
 
 class SellerLocationListCreateView(APIView):
@@ -390,9 +558,10 @@ class SellerLocationListCreateView(APIView):
     POST /api/seller/locations/
     List and create seller store locations.
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def get(self, request):
-        telegram_id = request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -404,7 +573,7 @@ class SellerLocationListCreateView(APIView):
         return Response(LocationSerializer(locations, many=True).data)
 
     def post(self, request):
-        telegram_id = request.data.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -427,9 +596,10 @@ class SellerLocationDetailView(APIView):
     PATCH /api/seller/locations/{id}/
     DELETE /api/seller/locations/{id}/
     """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def patch(self, request, pk):
-        telegram_id = request.data.get('telegram_id') or request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -449,7 +619,7 @@ class SellerLocationDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        telegram_id = request.GET.get('telegram_id')
+        telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 

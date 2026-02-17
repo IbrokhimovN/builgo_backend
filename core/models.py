@@ -5,6 +5,7 @@ NO Django User model. NO authentication.
 """
 
 from django.db import models
+from django.db.models import Q
 
 
 class Customer(models.Model):
@@ -55,7 +56,7 @@ class Seller(models.Model):
     name = models.CharField(max_length=150)
     store = models.ForeignKey(
         Store,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='sellers'
     )
     is_active = models.BooleanField(default=True)
@@ -103,7 +104,7 @@ class Product(models.Model):
 
     store = models.ForeignKey(
         Store,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='products'
     )
     category = models.ForeignKey(
@@ -136,7 +137,9 @@ class Order(models.Model):
     """
     STATUS_CHOICES = [
         ('new', 'New'),
+        ('processing', 'Processing'),
         ('done', 'Done'),
+        ('cancelled', 'Cancelled'),
     ]
 
     customer = models.ForeignKey(
@@ -146,7 +149,7 @@ class Order(models.Model):
     )
     store = models.ForeignKey(
         Store,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='orders'
     )
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='new')
@@ -172,7 +175,7 @@ class OrderItem(models.Model):
     )
     product = models.ForeignKey(
         Product,
-        on_delete=models.CASCADE
+        on_delete=models.PROTECT
     )
     quantity = models.PositiveIntegerField()
     price_at_order = models.DecimalField(max_digits=10, decimal_places=2)
@@ -217,6 +220,16 @@ class Location(models.Model):
     class Meta:
         db_table = 'locations'
         ordering = ['-is_default', '-created_at']
+        constraints = [
+            models.CheckConstraint(
+                check=~Q(customer__isnull=True, store__isnull=True),
+                name='location_must_have_owner',
+            ),
+            models.CheckConstraint(
+                check=Q(customer__isnull=True) | Q(store__isnull=True),
+                name='location_cannot_have_both_owners',
+            ),
+        ]
 
     def __str__(self):
         owner = self.customer or self.store
