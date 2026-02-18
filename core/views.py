@@ -139,6 +139,16 @@ class CustomerCreateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+        # Guard: don't register sellers as customers
+        if Seller.objects.filter(telegram_id=telegram_id, is_active=True).exists():
+            logger.warning(
+                "Seller telegram_id=%s attempted customer registration", telegram_id
+            )
+            return Response(
+                {'error': 'This telegram_id belongs to a seller'},
+                status=status.HTTP_409_CONFLICT
+            )
+
         try:
             customer, created = Customer.objects.update_or_create(
                 telegram_id=telegram_id,

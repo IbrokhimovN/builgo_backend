@@ -145,6 +145,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             CHECK_SELLER_ENDPOINT,
             params={"telegram_id": telegram_id},
         )
+        logger.info(
+            "check-seller: telegram_id=%s status=%s body=%s",
+            telegram_id, status_code, data,
+        )
+
+        if status_code != 200:
+            # API error — don't silently fall through to registration
+            logger.error(
+                "check-seller returned %s for telegram_id=%s: %s",
+                status_code, telegram_id, data,
+            )
+            await update.message.reply_text(
+                "❌ Server bilan bog'lanishda xatolik.\n"
+                "Iltimos /start buyrug'ini qaytadan bosing."
+            )
+            return ConversationHandler.END
 
         if data.get("is_seller"):
             # Seller → show dashboard
@@ -170,6 +186,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             CUSTOMER_CHECK_ENDPOINT,
             params={"telegram_id": telegram_id},
         )
+        logger.info(
+            "customer-check: telegram_id=%s status=%s body=%s",
+            telegram_id, status_code, data,
+        )
+
+        if status_code != 200:
+            logger.error(
+                "customer-check returned %s for telegram_id=%s: %s",
+                status_code, telegram_id, data,
+            )
+            await update.message.reply_text(
+                "❌ Server bilan bog'lanishda xatolik.\n"
+                "Iltimos /start buyrug'ini qaytadan bosing."
+            )
+            return ConversationHandler.END
 
         if data.get("exists"):
             # Returning customer → show app directly (skip registration)
