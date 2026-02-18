@@ -31,10 +31,12 @@ urlpatterns = [
     path('locations/<int:pk>/', views.CustomerLocationDetailView.as_view(), name='customer-location-detail'),
 
     # Seller endpoints (authenticated)
+    path('seller/profile/', views.SellerProfileView.as_view(), name='seller-profile'),
     path('seller/orders/', views.SellerOrdersView.as_view(), name='seller-orders'),
     path('seller/orders/<int:pk>/', views.SellerOrderUpdateView.as_view(), name='seller-order-update'),
-    path('seller/products/', views.SellerProductCreateView.as_view(), name='seller-product-create'),
+    path('seller/products/', views.SellerProductListCreateView.as_view(), name='seller-products'),
     path('seller/products/<int:pk>/', views.SellerProductUpdateView.as_view(), name='seller-product-update'),
+    path('seller/categories/', views.SellerCategoryListCreateView.as_view(), name='seller-categories'),
 
     # Seller location endpoints (authenticated)
     path('seller/locations/', views.SellerLocationListCreateView.as_view(), name='seller-locations'),

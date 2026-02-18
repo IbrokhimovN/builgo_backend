@@ -202,8 +202,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             return ConversationHandler.END
 
-        if data.get("exists"):
-            # Returning customer → show app directly (skip registration)
+        if data.get("exists") and data.get("is_complete"):
+            # Returning customer (FULLY REGISTERED) → show app directly
             keyboard = [
                 [
                     InlineKeyboardButton(
@@ -214,8 +214,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
-            await update.message.reply_text(
-                "Xush kelibsiz! Ilovani oching 👇",
+            # UX: Delete previous "checking..." message if possible
+            try:
+                await update.message.delete()
+            except Exception:
+                pass  # Ignore if already deleted or no permissions
+
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Xush kelibsiz! Ilovani oching 👇",
                 reply_markup=reply_markup,
             )
             return ConversationHandler.END
@@ -235,21 +242,59 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    # Not a seller, not a returning customer → start registration
-    await update.message.reply_text("Assalomu alaykum! Ismingizni kiriting:")
+    # Not a seller, OR incomplete customer → start registration
+    # UX: Delete previous start command to clean up chat
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    msg = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Assalomu alaykum! Ismingizni kiriting:"
+    )
+    # Save message ID to delete it later if needed (optional improvement)
+    context.user_data["last_bot_message_id"] = msg.message_id
     return ASKING_FIRST_NAME
 
 
 async def receive_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive first name from customer."""
     context.user_data["first_name"] = update.message.text.strip()
-    await update.message.reply_text("Familiyangizni kiriting:")
+    
+    # UX: Delete user's text message and previous bot message if possible
+    try:
+        await update.message.delete()
+        if "last_bot_message_id" in context.user_data:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=context.user_data["last_bot_message_id"]
+            )
+    except Exception:
+        pass
+
+    msg = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Familiyangizni kiriting:"
+    )
+    context.user_data["last_bot_message_id"] = msg.message_id
     return ASKING_LAST_NAME
 
 
 async def receive_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive last name from customer."""
     context.user_data["last_name"] = update.message.text.strip()
+
+    # UX: Delete user's text message and previous bot message if possible
+    try:
+        await update.message.delete()
+        if "last_bot_message_id" in context.user_data:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=context.user_data["last_bot_message_id"]
+            )
+    except Exception:
+        pass
 
     keyboard = [
         [KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True)]
@@ -258,10 +303,12 @@ async def receive_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         keyboard, one_time_keyboard=True, resize_keyboard=True
     )
 
-    await update.message.reply_text(
-        "Telefon raqamingizni yuboring:",
+    msg = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Telefon raqamingizni yuboring:",
         reply_markup=reply_markup,
     )
+    context.user_data["last_bot_message_id"] = msg.message_id
     return ASKING_PHONE
 
 
@@ -286,16 +333,21 @@ async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         telegram_id, first_name, last_name,
     )
 
+    # UX: Delete user's contact message and previous bot message if possible
+    try:
+        await update.message.delete()
+        if "last_bot_message_id" in context.user_data:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=context.user_data["last_bot_message_id"]
+            )
+    except Exception:
+        pass
+
     try:
         status_code, body = await api_post(CUSTOMER_ENDPOINT, payload)
 
         if status_code in (200, 201):
-            await update.message.reply_text(
-                "✅ Ma'lumotlaringiz saqlandi.\n"
-                "Buyurtma berish uchun ilovani oching 👇",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-
             keyboard = [
                 [
                     InlineKeyboardButton(
@@ -308,7 +360,7 @@ async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text="Ilova:",
+                text="✅ Ma'lumotlaringiz saqlandi!\nBuyurtma berish uchun ilovani oching 👇",
                 reply_markup=reply_markup,
             )
         else:
@@ -316,9 +368,10 @@ async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 "Backend returned %s for telegram_id=%s: %s",
                 status_code, telegram_id, body,
             )
-            await update.message.reply_text(
-                "❌ Ro'yxatdan o'tishda xatolik yuz berdi.\n"
-                "Iltimos /start buyrug'ini qaytadan bosing.",
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Ro'yxatdan o'tishda xatolik yuz berdi.\n"
+                     "Iltimos /start buyrug'ini qaytadan bosing.",
                 reply_markup=ReplyKeyboardRemove(),
             )
 

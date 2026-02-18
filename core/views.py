@@ -199,8 +199,22 @@ class CustomerCheckView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        exists = Customer.objects.filter(telegram_id=telegram_id).exists()
-        return Response({'exists': exists})
+        try:
+            customer = Customer.objects.get(telegram_id=telegram_id)
+            is_complete = bool(
+                customer.first_name and 
+                customer.last_name and 
+                customer.phone
+            )
+            return Response({
+                'exists': True,
+                'is_complete': is_complete
+            })
+        except Customer.DoesNotExist:
+            return Response({
+                'exists': False,
+                'is_complete': False
+            })
 
 
 # ============================================
@@ -255,11 +269,33 @@ class OrderCreateView(APIView):
     """
     POST /api/orders/
     Create a new order. Authenticated via initData or BotSecret.
+    telegram_id is extracted from auth context, NOT from request body.
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
 
     def post(self, request):
-        serializer = OrderCreateSerializer(data=request.data)
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            # Fallback: also accept from body for bot calls
+            telegram_id = request.data.get('telegram_id')
+            if not telegram_id:
+                return Response(
+                    {'error': 'telegram_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                telegram_id = int(telegram_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid telegram_id'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Inject telegram_id into serializer data from auth context
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        data['telegram_id'] = telegram_id
+
+        serializer = OrderCreateSerializer(data=data)
         if serializer.is_valid():
             order = serializer.save()
             return Response(
@@ -382,12 +418,55 @@ class SellerOrderUpdateView(APIView):
         return Response(OrderSerializer(order).data)
 
 
-class SellerProductCreateView(APIView):
+class SellerProfileView(APIView):
     """
-    POST /api/seller/products/
-    Create product (seller only). Store is auto-assigned.
+    GET /api/seller/profile/
+    Returns seller + store info for the authenticated seller.
+    Used by frontend during bootstrap to detect seller and get store info.
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({
+            'is_seller': True,
+            'seller': SellerSerializer(seller).data
+        })
+
+
+class SellerProductListCreateView(APIView):
+    """
+    GET /api/seller/products/  — List products for seller's store (paginated)
+    POST /api/seller/products/ — Create product (store auto-assigned)
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        products = Product.objects.filter(store=seller.store)
+        # Apply DRF pagination
+        from rest_framework.pagination import PageNumberPagination
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(products, request)
+        if page is not None:
+            serializer = ProductSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+        serializer = ProductSerializer(products, many=True)
+        return Response(serializer.data)
 
     def post(self, request):
         telegram_id = get_telegram_id(request)
@@ -407,6 +486,57 @@ class SellerProductCreateView(APIView):
             )
             return Response(
                 ProductSerializer(product).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SellerCategoryListCreateView(APIView):
+    """
+    GET /api/seller/categories/
+    POST /api/seller/categories/
+    List and create categories for the seller's store.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        categories = Category.objects.filter(store=seller.store)
+        # Apply DRF pagination
+        from rest_framework.pagination import PageNumberPagination
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(categories, request)
+        if page is not None:
+            serializer = CategorySerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+        serializer = CategorySerializer(categories, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = CategorySerializer(data=request.data)
+        if serializer.is_valid():
+            category = serializer.save(store=seller.store)
+            logger.info(
+                "Category '%s' created in store '%s' by seller telegram_id=%s",
+                category.name, seller.store.name, telegram_id
+            )
+            return Response(
+                CategorySerializer(category).data,
                 status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

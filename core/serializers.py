@@ -40,11 +40,15 @@ class StoreSerializer(serializers.ModelSerializer):
 class CategorySerializer(serializers.ModelSerializer):
     """
     Category serializer.
+    store is optional on input — auto-assigned by seller endpoint.
     """
     class Meta:
         model = Category
         fields = ['id', 'name', 'store']
         read_only_fields = ['id']
+        extra_kwargs = {
+            'store': {'required': False},
+        }
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -134,9 +138,10 @@ class OrderItemInputSerializer(serializers.Serializer):
 class OrderCreateSerializer(serializers.Serializer):
     """
     Serializer for creating orders.
-    Accepts telegram_id, store_id and list of items.
+    Accepts store_id and list of items.
+    telegram_id is injected by the view from auth context (NOT from request body).
     """
-    telegram_id = serializers.IntegerField(min_value=1)
+    telegram_id = serializers.IntegerField(min_value=1, required=False)
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
     items = OrderItemInputSerializer(many=True)
 
