@@ -40,15 +40,12 @@ class StoreSerializer(serializers.ModelSerializer):
 class CategorySerializer(serializers.ModelSerializer):
     """
     Category serializer.
-    store is optional on input — auto-assigned by seller endpoint.
+    store is auto-assigned by seller endpoint and is read-only.
     """
     class Meta:
         model = Category
         fields = ['id', 'name', 'store']
-        read_only_fields = ['id']
-        extra_kwargs = {
-            'store': {'required': False},
-        }
+        read_only_fields = ['id', 'store']
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -247,3 +244,13 @@ class LocationCreateSerializer(serializers.ModelSerializer):
         model = Location
         fields = ['id', 'name', 'latitude', 'longitude', 'address', 'is_default']
         read_only_fields = ['id']
+
+    def validate_latitude(self, value):
+        if value < -90 or value > 90:
+            raise serializers.ValidationError("Latitude must be between -90 and 90.")
+        return value
+
+    def validate_longitude(self, value):
+        if value < -180 or value > 180:
+            raise serializers.ValidationError("Longitude must be between -180 and 180.")
+        return value

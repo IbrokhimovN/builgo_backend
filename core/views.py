@@ -491,55 +491,58 @@ class SellerProductListCreateView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class SellerCategoryListCreateView(APIView):
+class SellerCategoryListCreateView(generics.ListCreateAPIView):
     """
     GET /api/seller/categories/
     POST /api/seller/categories/
     List and create categories for the seller's store.
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = CategorySerializer
 
-    def get(self, request):
-        telegram_id = get_telegram_id(request)
+    def get_queryset(self):
+        telegram_id = get_telegram_id(self.request)
         if not telegram_id:
-            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Category.objects.none()
 
         seller = _get_seller(telegram_id)
         if not seller:
-            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+            return Category.objects.none()
 
-        categories = Category.objects.filter(store=seller.store)
-        # Apply DRF pagination
-        from rest_framework.pagination import PageNumberPagination
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(categories, request)
-        if page is not None:
-            serializer = CategorySerializer(page, many=True)
-            return paginator.get_paginated_response(serializer.data)
-        serializer = CategorySerializer(categories, many=True)
-        return Response(serializer.data)
+        return Category.objects.filter(store=seller.store)
 
-    def post(self, request):
-        telegram_id = get_telegram_id(request)
-        if not telegram_id:
-            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
+    def perform_create(self, serializer):
+        telegram_id = get_telegram_id(self.request)
         seller = _get_seller(telegram_id)
-        if not seller:
-            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = CategorySerializer(data=request.data)
-        if serializer.is_valid():
+        # Assuming the check happens in list() or create() before we get here
+        if seller:
             category = serializer.save(store=seller.store)
             logger.info(
                 "Category '%s' created in store '%s' by seller telegram_id=%s",
                 category.name, seller.store.name, telegram_id
             )
-            return Response(
-                CategorySerializer(category).data,
-                status=status.HTTP_201_CREATED
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def create(self, request, *args, **kwargs):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+        
+        return super().create(request, *args, **kwargs)
+
+    def list(self, request, *args, **kwargs):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+            
+        return super().list(request, *args, **kwargs)
 
 
 class SellerProductUpdateView(APIView):
@@ -692,15 +695,33 @@ class CustomerLocationDetailView(APIView):
 # SELLER LOCATION ENDPOINTS (authenticated)
 # ============================================
 
-class SellerLocationListCreateView(APIView):
+class SellerLocationListCreateView(generics.ListCreateAPIView):
     """
     GET /api/seller/locations/?telegram_id=XXX
     POST /api/seller/locations/
     List and create seller store locations.
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = LocationCreateSerializer
 
-    def get(self, request):
+    def get_queryset(self):
+        telegram_id = get_telegram_id(self.request)
+        if not telegram_id:
+            return Location.objects.none()
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Location.objects.none()
+
+        return Location.objects.filter(store=seller.store)
+
+    def perform_create(self, serializer):
+        telegram_id = get_telegram_id(self.request)
+        seller = _get_seller(telegram_id)
+        if seller:
+            serializer.save(store=seller.store)
+
+    def create(self, request, *args, **kwargs):
         telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -708,11 +729,10 @@ class SellerLocationListCreateView(APIView):
         seller = _get_seller(telegram_id)
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+            
+        return super().create(request, *args, **kwargs)
 
-        locations = Location.objects.filter(store=seller.store)
-        return Response(LocationSerializer(locations, many=True).data)
-
-    def post(self, request):
+    def list(self, request, *args, **kwargs):
         telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -720,25 +740,31 @@ class SellerLocationListCreateView(APIView):
         seller = _get_seller(telegram_id)
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
-
-        serializer = LocationCreateSerializer(data=request.data)
-        if serializer.is_valid():
-            location = serializer.save(store=seller.store)
-            return Response(
-                LocationSerializer(location).data,
-                status=status.HTTP_201_CREATED
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        return super().list(request, *args, **kwargs)
 
 
-class SellerLocationDetailView(APIView):
+class SellerLocationDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
+    GET /api/seller/locations/{id}/
     PATCH /api/seller/locations/{id}/
     DELETE /api/seller/locations/{id}/
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = LocationCreateSerializer
 
-    def patch(self, request, pk):
+    def get_queryset(self):
+        telegram_id = get_telegram_id(self.request)
+        if not telegram_id:
+            return Location.objects.none()
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Location.objects.none()
+
+        return Location.objects.filter(store=seller.store)
+
+    def update(self, request, *args, **kwargs):
         telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -746,19 +772,11 @@ class SellerLocationDetailView(APIView):
         seller = _get_seller(telegram_id)
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+            
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)
 
-        try:
-            location = Location.objects.get(pk=pk, store=seller.store)
-        except Location.DoesNotExist:
-            return Response({'error': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = LocationCreateSerializer(location, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(LocationSerializer(location).data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def delete(self, request, pk):
+    def destroy(self, request, *args, **kwargs):
         telegram_id = get_telegram_id(request)
         if not telegram_id:
             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -766,11 +784,5 @@ class SellerLocationDetailView(APIView):
         seller = _get_seller(telegram_id)
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
-
-        try:
-            location = Location.objects.get(pk=pk, store=seller.store)
-        except Location.DoesNotExist:
-            return Response({'error': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
-
-        location.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        return super().destroy(request, *args, **kwargs)
