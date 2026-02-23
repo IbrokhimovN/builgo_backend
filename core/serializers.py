@@ -109,18 +109,33 @@ class OrderSerializer(serializers.ModelSerializer):
     """
     items = OrderItemSerializer(many=True, read_only=True)
     customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.CharField(source='customer.phone', read_only=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
+    location = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
         fields = [
-            'id', 'customer', 'customer_name', 'store', 'store_name',
-            'status', 'items', 'created_at', 'updated_at'
+            'id', 'customer', 'customer_name', 'customer_phone', 'store', 'store_name',
+            'status', 'items', 'location', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'customer', 'created_at', 'updated_at', 'customer_name', 'store_name']
+        read_only_fields = ['id', 'customer', 'created_at', 'updated_at', 'customer_name', 'customer_phone', 'store_name', 'location']
 
     def get_customer_name(self, obj):
         return f"{obj.customer.first_name} {obj.customer.last_name}"
+
+    def get_location(self, obj):
+        location = obj.customer.locations.filter(is_default=True).first()
+        if not location:
+            location = obj.customer.locations.first()
+        if location:
+            return {
+                'name': location.name,
+                'address': location.address,
+                'latitude': float(location.latitude) if location.latitude else None,
+                'longitude': float(location.longitude) if location.longitude else None,
+            }
+        return None
 
 
 class OrderItemInputSerializer(serializers.Serializer):

@@ -703,6 +703,7 @@ class SellerLocationListCreateView(generics.ListCreateAPIView):
     """
     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
     serializer_class = LocationCreateSerializer
+    pagination_class = None
 
     def get_queryset(self):
         telegram_id = get_telegram_id(self.request)
