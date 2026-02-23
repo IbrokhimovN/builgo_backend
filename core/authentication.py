@@ -79,6 +79,9 @@ class TelegramInitDataAuthentication(BaseAuthentication):
         request.telegram_id = telegram_id
         return (user, None)
 
+    def authenticate_header(self, request):
+        return 'InitData'
+
     def _verify_init_data(self, init_data: str, bot_token: str) -> int:
         """
         Verify initData HMAC-SHA256 signature and extract telegram_id.
@@ -188,6 +191,9 @@ class BotSecretAuthentication(BaseAuthentication):
         # Bot call without telegram_id (e.g., health check)
         request.telegram_id = None
         return (TelegramUser(0), None)
+
+    def authenticate_header(self, request):
+        return 'BotSecret'
 
 
 def get_telegram_id(request) -> int | None:
