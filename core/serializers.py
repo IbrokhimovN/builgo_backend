@@ -59,7 +59,7 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'store', 'store_name', 'category', 'category_name',
-            'name', 'price', 'unit', 'image', 'is_available', 'created_at'
+            'name', 'description', 'price', 'unit', 'quantity', 'image', 'is_available', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'store_name', 'category_name']
 
@@ -71,7 +71,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = Product
-        fields = ['id', 'category', 'name', 'price', 'unit', 'image', 'is_available']
+        fields = ['id', 'category', 'name', 'description', 'price', 'unit', 'quantity', 'image', 'is_available']
         read_only_fields = ['id']
 
     def validate_price(self, value):
@@ -190,7 +190,7 @@ class OrderCreateSerializer(serializers.Serializer):
             # Validate and create order items
             for item_data in items_data:
                 try:
-                    product = Product.objects.get(
+                    product = Product.objects.select_for_update().get(
                         id=item_data['product'],
                         store=store,
                         is_available=True
@@ -200,6 +200,16 @@ class OrderCreateSerializer(serializers.Serializer):
                         f"Product {item_data['product']} not found, "
                         f"unavailable, or does not belong to this store"
                     )
+
+                if product.quantity < item_data['quantity']:
+                    raise serializers.ValidationError(
+                        f"Insufficient stock for product '{product.name}'. "
+                        f"Available: {product.quantity}, Requested: {item_data['quantity']}"
+                    )
+                
+                # Reduce stock atomically (already locked by select_for_update)
+                product.quantity -= item_data['quantity']
+                product.save(update_fields=['quantity', 'updated_at'])
 
                 OrderItem.objects.create(
                     order=order,
