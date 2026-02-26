@@ -5,37 +5,32 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 def notify_seller_new_order(order):
-    """
-    Send a Telegram message to the seller when a new order is placed.
-    Fails silently so as to not block order creation.
-    """
     try:
-        # Get active seller
         seller = order.store.sellers.filter(is_active=True).first()
-        if not seller:
+        if not seller or not seller.telegram_id:
             return
+
+        customer = order.customer
+        location = customer.locations.filter(is_default=True).first()
+
+        map_link = "Manzil ko'rsatilmagan"
+        if location:
+            map_link = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
 
         message = (
             "📦 New Order!\n\n"
             f"Order ID: #{order.id}\n"
-            f"Customer: {order.customer.first_name}"
+            f"Customer: {customer.first_name}\n"
+            f"📍 Xarita: {map_link}"
         )
 
-        bot_token = getattr(settings, 'TELEGRAM_BOT_TOKEN', None)
-        if not bot_token:
-            logger.error("TELEGRAM_BOT_TOKEN is not set in settings.")
-            return
-
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": seller.telegram_id,
-            "text": message,
-            "parse_mode": "Markdown"
+            "text": message
         }
 
-        # Use a short timeout to prevent blocking
-        response = requests.post(url, json=payload, timeout=5)
-        response.raise_for_status()
+        requests.post(url, json=payload, timeout=5)
 
-    except Exception as e:
-        logger.error(f"Failed to send Telegram notification to seller for Order #{order.id}: {e}")
+    except Exception:
+        logger.exception("Telegram notification failed")

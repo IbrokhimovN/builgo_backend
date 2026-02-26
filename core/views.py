@@ -295,6 +295,27 @@ class OrderCreateView(APIView):
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         data['telegram_id'] = telegram_id
 
+        # Validate business rules: customer phone and location
+        customer = Customer.objects.filter(telegram_id=telegram_id).first()
+        if not customer:
+            return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not customer.phone:
+            return Response(
+                {"error": "Phone number is required to place an order"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        location = Location.objects.filter(customer=customer, is_default=True).first()
+        if not location:
+            # Fallback to any location just in case they don't have a default
+            location = Location.objects.filter(customer=customer).first()
+            if not location:
+                return Response(
+                    {"error": "Delivery location is required to place an order"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = OrderCreateSerializer(data=data)
         if serializer.is_valid():
             order = serializer.save()
