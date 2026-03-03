@@ -286,6 +286,31 @@ class CheckSellerView(APIView):
 # ORDER ENDPOINTS (authenticated)
 # ============================================
 
+class CustomerActiveOrderView(APIView):
+    """
+    GET /api/customer/active-order/
+    Check if customer has any active orders ('new' or 'processing').
+    Used to prompt address confirmation on app launch.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+             return Response({"has_active_order": False})
+        
+        try:
+             customer = Customer.objects.get(telegram_id=telegram_id)
+        except Customer.DoesNotExist:
+             return Response({"has_active_order": False})
+             
+        has_active = Order.objects.filter(
+             customer=customer, 
+             status__in=['new', 'processing']
+        ).exists()
+        
+        return Response({"has_active_order": has_active})
+
 class OrderCreateView(APIView):
     """
     POST /api/orders/
