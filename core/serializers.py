@@ -7,7 +7,7 @@ import logging
 from django.db import transaction
 from rest_framework import serializers
 from .models import (
-    Customer, Store, Seller, Category, Product, Order, OrderItem, Location
+    Customer, Store, Seller, Category, Product, Order, OrderItem, Location, StoreRating, StoreWorkingHours
 )
 
 logger = logging.getLogger(__name__)
@@ -31,10 +31,66 @@ class StoreSerializer(serializers.ModelSerializer):
     """
     Store serializer for listing stores.
     """
+    average_rating = serializers.FloatField(read_only=True)
+    ratings_count = serializers.IntegerField(read_only=True)
+    is_open = serializers.BooleanField(read_only=True)
+    working_hours = StoreWorkingHoursSerializer(many=True, read_only=True)
+
     class Meta:
         model = Store
-        fields = ['id', 'name', 'image', 'is_active', 'created_at']
+        fields = ['id', 'name', 'description', 'phone', 'image', 'is_active', 'created_at', 'average_rating', 'ratings_count', 'is_open', 'working_hours']
         read_only_fields = ['id', 'created_at']
+
+class SellerStoreUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer to allow sellers to update their store profile.
+    Supports nested working hours updates.
+    """
+    working_hours = StoreWorkingHoursSerializer(many=True, required=False)
+
+    class Meta:
+        model = Store
+        fields = ['name', 'description', 'phone', 'image', 'working_hours']
+
+    def update(self, instance, validated_data):
+        working_hours_data = validated_data.pop('working_hours', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # Update working hours
+        if working_hours_data is not None:
+            instance.working_hours.all().delete()
+            for wh_data in working_hours_data:
+                from .models import StoreWorkingHours
+                StoreWorkingHours.objects.create(store=instance, **wh_data)
+
+        return instance
+
+class StoreWorkingHoursSerializer(serializers.ModelSerializer):
+    """
+    Serializer for store working hours.
+    """
+    class Meta:
+        model = StoreWorkingHours
+        fields = ['id', 'store', 'day_of_week', 'open_time', 'close_time']
+        read_only_fields = ['id', 'store']
+
+
+class StoreRatingSerializer(serializers.ModelSerializer):
+    """
+    Serializer for store ratings.
+    """
+    class Meta:
+        model = StoreRating
+        fields = ['id', 'store', 'customer', 'rating', 'created_at']
+        read_only_fields = ['id', 'store', 'customer', 'created_at']
+
+    def validate_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Rating must be between 1 and 5.")
+        return value
 
 
 class CategorySerializer(serializers.ModelSerializer):

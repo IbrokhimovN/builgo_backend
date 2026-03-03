@@ -5,7 +5,8 @@ NO Django User model. NO authentication.
 """
 
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, Avg
+from django.utils import timezone
 
 
 class Customer(models.Model):
@@ -32,6 +33,8 @@ class Store(models.Model):
     Store model — represents a seller's store.
     """
     name = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default='')
+    phone = models.CharField(max_length=20, blank=True, default='')
     image = models.ImageField(upload_to='stores/', null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -43,6 +46,74 @@ class Store(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def average_rating(self):
+        avg = self.ratings.aggregate(avg=Avg('rating'))['avg']
+        return round(avg, 1) if avg else 0.0
+
+    @property
+    def ratings_count(self):
+        return self.ratings.count()
+
+    @property
+    def is_open(self):
+        if not self.is_active:
+            return False
+        now = timezone.localtime()
+        today = now.weekday()
+        schedule = self.working_hours.filter(day_of_week=today).first()
+        if not schedule:
+            return False
+        return schedule.open_time <= now.time() <= schedule.close_time
+
+
+class StoreWorkingHours(models.Model):
+    """
+    Working hours per day for a store.
+    """
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="working_hours"
+    )
+    day_of_week = models.IntegerField()  # 0=Monday, 6=Sunday
+    open_time = models.TimeField()
+    close_time = models.TimeField()
+
+    class Meta:
+        db_table = 'store_working_hours'
+        unique_together = ('store', 'day_of_week')
+        ordering = ['day_of_week']
+
+    def __str__(self):
+        return f"{self.store.name} - Day {self.day_of_week} ({self.open_time} - {self.close_time})"
+
+
+class StoreRating(models.Model):
+    """
+    Store rating by a customer.
+    Customer can rate a store 1-5.
+    """
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="ratings"
+    )
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.CASCADE,
+        related_name="store_ratings"
+    )
+    rating = models.IntegerField()  # 1-5
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'store_ratings'
+        unique_together = ('store', 'customer')
+
+    def __str__(self):
+        return f"{self.customer} rated {self.store} {self.rating} stars"
 
 
 class Seller(models.Model):
@@ -100,6 +171,7 @@ class Product(models.Model):
         ('dona', 'Dona'),
         ('kg', 'KG'),
         ('m', 'Metr'),
+        ('m2',"Metr kvadrat")
     ]
 
     store = models.ForeignKey(

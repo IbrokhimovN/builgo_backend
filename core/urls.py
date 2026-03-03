@@ -20,7 +20,11 @@ urlpatterns = [
     path('stores/', views.StoreListView.as_view(), name='store-list'),
     path('stores/<int:store_id>/categories/', views.StoreCategoriesView.as_view(), name='store-categories'),
     path('stores/<int:store_id>/products/', views.StoreProductsView.as_view(), name='store-products'),
-    path('search/', views.SearchProductsView.as_view(), name='search-products'),
+    path('stores/<int:store_id>/rate/', views.StoreRateView.as_view(), name='store-rate'),
+    path('search/', views.UniversalSearchView.as_view(), name='search-universal'),
+
+    # Customer specific endpoints
+    path('customer/active-order/', views.CustomerActiveOrderView.as_view(), name='customer-active-order'),
 
     # Order endpoints (authenticated)
     path('orders/', views.OrderCreateView.as_view(), name='order-create'),
@@ -32,6 +36,7 @@ urlpatterns = [
 
     # Seller endpoints (authenticated)
     path('seller/profile/', views.SellerProfileView.as_view(), name='seller-profile'),
+    path('seller/store/', views.SellerStoreUpdateView.as_view(), name='seller-store-update'),
     path('seller/orders/', views.SellerOrdersView.as_view(), name='seller-orders'),
     path('seller/orders/<int:pk>/', views.SellerOrderUpdateView.as_view(), name='seller-order-update'),
     path('seller/products/', views.SellerProductListCreateView.as_view(), name='seller-products'),

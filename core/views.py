@@ -27,7 +27,9 @@ from .serializers import (
     CustomerSerializer, StoreSerializer,
     CategorySerializer, ProductSerializer, ProductCreateSerializer,
     OrderSerializer, OrderCreateSerializer, SellerSerializer,
-    LocationSerializer, LocationCreateSerializer
+    OrderSerializer, OrderCreateSerializer, SellerSerializer,
+    LocationSerializer, LocationCreateSerializer, StoreRatingSerializer,
+    SellerStoreUpdateSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -87,25 +89,44 @@ class StoreProductsView(generics.ListAPIView):
         return queryset
 
 
-class SearchProductsView(generics.ListAPIView):
+class UniversalSearchView(APIView):
     """
-    GET /api/search/?q=cement
-    Search products across all stores. Public.
-    Paginated via DRF default pagination.
+    GET /api/search/?q=
+    Search across products, stores, categories. Public.
     """
     authentication_classes = []
     permission_classes = [AllowAny]
-    serializer_class = ProductSerializer
 
-    def get_queryset(self):
-        query = self.request.GET.get('q', '').strip()
+    def get(self, request):
+        query = request.GET.get('q', '').strip()
         if not query:
-            return Product.objects.none()
-        return Product.objects.filter(
-            Q(name__icontains=query),
+            return Response({
+                "products": [],
+                "stores": [],
+                "categories": []
+            })
+            
+        products = Product.objects.select_related('store', 'category').filter(
+            Q(name__icontains=query) | Q(description__icontains=query),
             is_available=True,
             store__is_active=True
-        )
+        )[:10]
+        
+        stores = Store.objects.filter(
+            name__icontains=query,
+            is_active=True
+        )[:10]
+        
+        categories = Category.objects.select_related('store').filter(
+            name__icontains=query,
+            store__is_active=True
+        )[:10]
+        
+        return Response({
+            "products": ProductSerializer(products, many=True).data,
+            "stores": StoreSerializer(stores, many=True).data,
+            "categories": CategorySerializer(categories, many=True).data
+        })
 
 
 # ============================================
@@ -316,6 +337,22 @@ class OrderCreateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+        # Validate that the store is open
+        store_id = data.get('store')
+        if store_id:
+            try:
+                store = Store.objects.get(id=store_id, is_active=True)
+                if not store.is_open:
+                    return Response(
+                        {"error": "This store is currently closed. You cannot place an order at this time."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except Store.DoesNotExist:
+                return Response(
+                    {"error": "Store not found or is inactive."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         serializer = OrderCreateSerializer(data=data)
         if serializer.is_valid():
             order = serializer.save()
@@ -364,9 +401,115 @@ def _get_seller(telegram_id):
         return None
 
 
+class StoreRateView(APIView):
+    """
+    POST /api/stores/{id}/rate/
+    Rate a store. Authenticated via initData or BotSecret.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def post(self, request, store_id):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            store = Store.objects.get(id=store_id, is_active=True)
+        except Store.DoesNotExist:
+            return Response({'error': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        customer = Customer.objects.filter(telegram_id=telegram_id).first()
+        if not customer:
+            return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Guard: Seller cannot rate their own store
+        seller = _get_seller(telegram_id)
+        if seller and seller.store_id == store.id:
+            return Response(
+                {'error': 'You cannot rate your own store'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        serializer = StoreRatingSerializer(data=request.data)
+        if serializer.is_valid():
+            from .models import StoreRating
+            rating_val = serializer.validated_data['rating']
+            rating, created = StoreRating.objects.update_or_create(
+                store=store,
+                customer=customer,
+                defaults={'rating': rating_val}
+            )
+            return Response(
+                StoreRatingSerializer(rating).data,
+                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 # ============================================
 # SELLER ENDPOINTS (authenticated via initData)
 # ============================================
+
+class SellerStoreUpdateView(generics.RetrieveUpdateAPIView):
+    """
+    GET /api/seller/store/
+    PATCH /api/seller/store/
+    Retrieve and update seller's own store.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    serializer_class = SellerStoreUpdateSerializer
+
+    def get_object(self):
+        telegram_id = get_telegram_id(self.request)
+        if not telegram_id:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'error': 'telegram_id is required'})
+            
+        seller = _get_seller(telegram_id)
+        if not seller:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied({'error': 'Not a seller'})
+            
+        return seller.store
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if 'working_hours_json' in data:
+            import json
+            try:
+                parsed = json.loads(data['working_hours_json'])
+                if hasattr(data, 'setlist'):
+                    # QueryDict (multipart/form-data) requires setlist for lists
+                    # But actually nested lists of dicts in DRF might just need setting
+                    # However, DRF's ListField requires a list. Let's try basic assignment
+                    # or creating a regular dict.
+                    pass
+                data['working_hours'] = parsed
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Failed to parse working_hours_json: %s", e)
+
+        # Build regular dict if data is QueryDict to avoid setlist issues with complex types
+        if hasattr(data, 'dict'):
+            parsed_data = {}
+            for k in data.keys():
+                if k == 'working_hours':
+                    parsed_data[k] = data[k]
+                else:
+                    parsed_data[k] = data.get(k)
+            data = parsed_data
+
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def patch(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
 class SellerOrdersView(generics.ListAPIView):
     """
