@@ -27,6 +27,16 @@ class CustomerSerializer(serializers.ModelSerializer):
         }
 
 
+class StoreWorkingHoursSerializer(serializers.ModelSerializer):
+    """
+    Serializer for store working hours.
+    """
+    class Meta:
+        model = StoreWorkingHours
+        fields = ['id', 'store', 'day_of_week', 'open_time', 'close_time']
+        read_only_fields = ['id', 'store']
+
+
 class StoreSerializer(serializers.ModelSerializer):
     """
     Store serializer for listing stores.
@@ -67,15 +77,6 @@ class SellerStoreUpdateSerializer(serializers.ModelSerializer):
                 StoreWorkingHours.objects.create(store=instance, **wh_data)
 
         return instance
-
-class StoreWorkingHoursSerializer(serializers.ModelSerializer):
-    """
-    Serializer for store working hours.
-    """
-    class Meta:
-        model = StoreWorkingHours
-        fields = ['id', 'store', 'day_of_week', 'open_time', 'close_time']
-        read_only_fields = ['id', 'store']
 
 
 class StoreRatingSerializer(serializers.ModelSerializer):
