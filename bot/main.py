@@ -264,7 +264,7 @@ async def receive_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # UX: Delete user's text message and previous bot message if possible
     try:
-        await update.message.delete()
+        # await update.message.delete()
         if "last_bot_message_id" in context.user_data:
             await context.bot.delete_message(
                 chat_id=update.effective_chat.id,

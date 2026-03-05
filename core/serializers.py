@@ -105,9 +105,25 @@ class CategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'store']
 
 
-class ProductSerializer(serializers.ModelSerializer):
+class ProductListSerializer(serializers.ModelSerializer):
     """
-    Product serializer with category details.
+    Lightweight Product serializer for listings (excluding description and heavy fields).
+    """
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    store_name = serializers.CharField(source='store.name', read_only=True)
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'store', 'store_name', 'category', 'category_name',
+            'name', 'price', 'unit', 'quantity', 'image', 'is_available'
+        ]
+        read_only_fields = ['id', 'store_name', 'category_name']
+
+
+class ProductDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed Product serializer including all fields (description, dates, etc)
     """
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)

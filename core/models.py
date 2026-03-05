@@ -7,6 +7,8 @@ NO Django User model. NO authentication.
 from django.db import models
 from django.db.models import Q, Avg
 from django.utils import timezone
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField, SearchVector
 
 
 class Customer(models.Model):
@@ -43,6 +45,10 @@ class Store(models.Model):
     class Meta:
         db_table = 'stores'
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'created_at']),
+            models.Index(fields=['name']),
+        ]
 
     def __str__(self):
         return self.name
@@ -195,13 +201,27 @@ class Product(models.Model):
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    search_vector = SearchVectorField(null=True, blank=True)
 
     class Meta:
         db_table = 'products'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['category', 'is_available']),
+            models.Index(fields=['store', 'is_available']),
+            models.Index(fields=['is_available', 'price']),
+            GinIndex(fields=['search_vector']),
+        ]
 
     def __str__(self):
         return f"{self.name} - {self.price} ({self.unit})"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Update the search vector asynchronously or in-place
+        Product.objects.filter(pk=self.pk).update(
+            search_vector=SearchVector('name', 'description')
+        )
 
 
 class Order(models.Model):
@@ -233,6 +253,11 @@ class Order(models.Model):
     class Meta:
         db_table = 'orders'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['store', 'status']),
+            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['created_at']),
+        ]
 
     def __str__(self):
         return f"Order #{self.id} - {self.customer.first_name} @ {self.store.name}"

@@ -24,13 +24,23 @@ def notify_seller_new_order(order):
             f"📍 Xarita: {map_link}"
         )
 
-        url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+        url_api = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": seller.telegram_id,
-            "text": message
+            "text": message,
+            "reply_markup": {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "📊 Open Orders",
+                            "url": f"{settings.MINI_APP_URL}/?mode=seller"
+                        }
+                    ]
+                ]
+            }
         }
 
-        requests.post(url, json=payload, timeout=5)
+        requests.post(url_api, json=payload, timeout=5)
 
     except Exception:
         logger.exception("Telegram notification failed")

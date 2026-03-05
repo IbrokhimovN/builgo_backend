@@ -16,6 +16,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q
+from django.contrib.postgres.search import SearchQuery
+from django.core.cache import cache
 
 from .authentication import (
     TelegramInitDataAuthentication,
@@ -25,7 +27,7 @@ from .authentication import (
 from .models import Customer, Store, Seller, Category, Product, Order, Location
 from .serializers import (
     CustomerSerializer, StoreSerializer,
-    CategorySerializer, ProductSerializer, ProductCreateSerializer,
+    CategorySerializer, ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     OrderSerializer, OrderCreateSerializer, SellerSerializer,
     OrderSerializer, OrderCreateSerializer, SellerSerializer,
     LocationSerializer, LocationCreateSerializer, StoreRatingSerializer,
@@ -52,6 +54,15 @@ class StoreListView(generics.ListAPIView):
     queryset = Store.objects.filter(is_active=True)
     serializer_class = StoreSerializer
 
+    def list(self, request, *args, **kwargs):
+        cache_key = 'stores_list_active'
+        data = cache.get(cache_key)
+        if not data:
+            response = super().list(request, *args, **kwargs)
+            data = response.data
+            cache.set(cache_key, data, timeout=60 * 60)  # 1 hour
+        return Response(data)
+
 
 class StoreCategoriesView(generics.ListAPIView):
     """
@@ -66,6 +77,16 @@ class StoreCategoriesView(generics.ListAPIView):
         store_id = self.kwargs['store_id']
         return Category.objects.filter(store_id=store_id)
 
+    def list(self, request, *args, **kwargs):
+        store_id = self.kwargs['store_id']
+        cache_key = f'store_{store_id}_categories'
+        data = cache.get(cache_key)
+        if not data:
+            response = super().list(request, *args, **kwargs)
+            data = response.data
+            cache.set(cache_key, data, timeout=60 * 60)
+        return Response(data)
+
 
 class StoreProductsView(generics.ListAPIView):
     """
@@ -75,11 +96,11 @@ class StoreProductsView(generics.ListAPIView):
     """
     authentication_classes = []
     permission_classes = [AllowAny]
-    serializer_class = ProductSerializer
+    serializer_class = ProductListSerializer
 
     def get_queryset(self):
         store_id = self.kwargs['store_id']
-        queryset = Product.objects.filter(
+        queryset = Product.objects.select_related('store', 'category').filter(
             store_id=store_id,
             is_available=True
         )
@@ -88,6 +109,45 @@ class StoreProductsView(generics.ListAPIView):
             queryset = queryset.filter(category_id=category_id)
         return queryset
 
+    def list(self, request, *args, **kwargs):
+        store_id = self.kwargs['store_id']
+        category_id = self.request.GET.get('category', '')
+        
+        # We don't want to break cursor pagination caching by caching a single large list.
+        # So we include query parameters in the cache key.
+        cache_key = f'store_{store_id}_products_{category_id}'
+        # InDRF, generic lists handle pagination natively. 
+        # Caching the paginated response dictates using the exact page query param too.
+        page = self.request.GET.get('page', '1')
+        cache_key += f'_page_{page}'
+        
+        data = cache.get(cache_key)
+        if not data:
+            response = super().list(request, *args, **kwargs)
+            data = response.data
+            cache.set(cache_key, data, timeout=60 * 15)  # 15 minutes
+        return Response(data)
+
+
+class StoreProductDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/products/{id}/
+    Retrieve full details of a specific product. Public.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    queryset = Product.objects.select_related('store', 'category').filter(is_available=True)
+    serializer_class = ProductDetailSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        product_id = self.kwargs.get('pk')
+        cache_key = f'product_detail_{product_id}'
+        data = cache.get(cache_key)
+        if not data:
+            response = super().retrieve(request, *args, **kwargs)
+            data = response.data
+            cache.set(cache_key, data, timeout=60 * 60)
+        return Response(data)
 
 class UniversalSearchView(APIView):
     """
@@ -107,7 +167,7 @@ class UniversalSearchView(APIView):
             })
             
         products = Product.objects.select_related('store', 'category').filter(
-            Q(name__icontains=query) | Q(description__icontains=query),
+            search_vector=SearchQuery(query),
             is_available=True,
             store__is_active=True
         )[:10]
@@ -123,7 +183,7 @@ class UniversalSearchView(APIView):
         )[:10]
         
         return Response({
-            "products": ProductSerializer(products, many=True).data,
+            "products": ProductListSerializer(products, many=True).data,
             "stores": StoreSerializer(stores, many=True).data,
             "categories": CategorySerializer(categories, many=True).data
         })
@@ -646,15 +706,15 @@ class SellerProductListCreateView(APIView):
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
 
-        products = Product.objects.filter(store=seller.store)
+        products = Product.objects.select_related('store', 'category').filter(store=seller.store)
         # Apply DRF pagination
         from rest_framework.pagination import PageNumberPagination
         paginator = PageNumberPagination()
         page = paginator.paginate_queryset(products, request)
         if page is not None:
-            serializer = ProductSerializer(page, many=True)
+            serializer = ProductListSerializer(page, many=True)
             return paginator.get_paginated_response(serializer.data)
-        serializer = ProductSerializer(products, many=True)
+        serializer = ProductListSerializer(products, many=True)
         return Response(serializer.data)
 
     def post(self, request):
@@ -674,7 +734,7 @@ class SellerProductListCreateView(APIView):
                 product.name, seller.store.name, telegram_id
             )
             return Response(
-                ProductSerializer(product).data,
+                ProductDetailSerializer(product).data,
                 status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -698,7 +758,7 @@ class SellerCategoryListCreateView(generics.ListCreateAPIView):
         if not seller:
             return Category.objects.none()
 
-        return Category.objects.filter(store=seller.store)
+        return Category.objects.select_related('store').filter(store=seller.store)
 
     def perform_create(self, serializer):
         telegram_id = get_telegram_id(self.request)
@@ -762,7 +822,7 @@ class SellerProductUpdateView(APIView):
         serializer = ProductCreateSerializer(product, data=request.data, partial=True)
         if serializer.is_valid():
             updated = serializer.save()
-            return Response(ProductSerializer(updated).data)
+            return Response(ProductDetailSerializer(updated).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
