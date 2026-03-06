@@ -21,11 +21,18 @@ urlpatterns = [
     path('stores/<int:store_id>/categories/', views.StoreCategoriesView.as_view(), name='store-categories'),
     path('stores/<int:store_id>/products/', views.StoreProductsView.as_view(), name='store-products'),
     path('products/<int:pk>/', views.StoreProductDetailView.as_view(), name='product-detail'),
+    path('products/<int:pk>/related/', views.ProductRecommendationView.as_view(), name='product-related'),
     path('stores/<int:store_id>/rate/', views.StoreRateView.as_view(), name='store-rate'),
     path('search/', views.UniversalSearchView.as_view(), name='search-universal'),
+    path('search/suggestions/', views.SearchSuggestionView.as_view(), name='search-suggestions'),
 
     # Customer specific endpoints
     path('customer/active-order/', views.CustomerActiveOrderView.as_view(), name='customer-active-order'),
+
+    # Cart endpoints (authenticated)
+    path('customer/cart/', views.CartItemListView.as_view(), name='customer-cart'),
+    path('customer/cart/<int:pk>/', views.CartItemDetailView.as_view(), name='customer-cart-detail'),
+    path('customer/cart/clear/', views.CartClearView.as_view(), name='customer-cart-clear'),
 
     # Order endpoints (authenticated)
     path('orders/', views.OrderCreateView.as_view(), name='order-create'),
@@ -37,6 +44,7 @@ urlpatterns = [
 
     # Seller endpoints (authenticated)
     path('seller/profile/', views.SellerProfileView.as_view(), name='seller-profile'),
+    path('seller/analytics/', views.SellerAnalyticsView.as_view(), name='seller-analytics'),
     path('seller/store/', views.SellerStoreUpdateView.as_view(), name='seller-store-update'),
     path('seller/orders/', views.SellerOrdersView.as_view(), name='seller-orders'),
     path('seller/orders/<int:pk>/', views.SellerOrderUpdateView.as_view(), name='seller-order-update'),

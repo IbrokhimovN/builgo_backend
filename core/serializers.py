@@ -7,7 +7,8 @@ import logging
 from django.db import transaction
 from rest_framework import serializers
 from .models import (
-    Customer, Store, Seller, Category, Product, Order, OrderItem, Location, StoreRating, StoreWorkingHours
+    Customer, Store, Seller, Category, Product, Order, OrderItem, Location, StoreRating, StoreWorkingHours,
+    ProductImage, ProductAttributeValue, ProductVariant, CartItem
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,25 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'store']
         read_only_fields = ['id', 'store']
 
+class ProductImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductImage
+        fields = ['id', 'image', 'order']
+
+class ProductAttributeValueSerializer(serializers.ModelSerializer):
+    attribute_name = serializers.CharField(source='attribute.name', read_only=True)
+    
+    class Meta:
+        model = ProductAttributeValue
+        fields = ['id', 'attribute_name', 'value']
+
+class ProductVariantSerializer(serializers.ModelSerializer):
+    attributes = ProductAttributeValueSerializer(source='attribute_values', many=True, read_only=True)
+    
+    class Meta:
+        model = ProductVariant
+        fields = ['id', 'sku', 'price', 'quantity', 'attributes']
+
 
 class ProductListSerializer(serializers.ModelSerializer):
     """
@@ -112,11 +132,15 @@ class ProductListSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
 
+    images = ProductImageSerializer(many=True, read_only=True)
+    variants = ProductVariantSerializer(many=True, read_only=True)
+
     class Meta:
         model = Product
         fields = [
             'id', 'store', 'store_name', 'category', 'category_name',
-            'name', 'price', 'unit', 'quantity', 'image', 'is_available'
+            'name', 'price', 'old_price', 'installment_price', 'rating', 'reviews_count', 'unit', 'quantity', 'image', 'is_available',
+            'images', 'variants'
         ]
         read_only_fields = ['id', 'store_name', 'category_name']
 
@@ -128,11 +152,15 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
 
+    images = ProductImageSerializer(many=True, read_only=True)
+    variants = ProductVariantSerializer(many=True, read_only=True)
+
     class Meta:
         model = Product
         fields = [
             'id', 'store', 'store_name', 'category', 'category_name',
-            'name', 'description', 'price', 'unit', 'quantity', 'image', 'is_available', 'created_at'
+            'name', 'description', 'price', 'old_price', 'installment_price', 'rating', 'reviews_count', 'unit', 'quantity', 'image', 'is_available', 'created_at',
+            'images', 'variants'
         ]
         read_only_fields = ['id', 'created_at', 'store_name', 'category_name']
 
@@ -144,7 +172,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = Product
-        fields = ['id', 'category', 'name', 'description', 'price', 'unit', 'quantity', 'image', 'is_available']
+        fields = ['id', 'category', 'name', 'description', 'price', 'old_price', 'installment_price', 'unit', 'quantity', 'image', 'is_available']
         read_only_fields = ['id']
 
     def validate_price(self, value):
@@ -352,3 +380,11 @@ class LocationCreateSerializer(serializers.ModelSerializer):
         if value < -180 or value > 180:
             raise serializers.ValidationError("Longitude must be between -180 and 180.")
         return value
+
+class CartItemSerializer(serializers.ModelSerializer):
+    product = ProductListSerializer(read_only=True)
+    variant = ProductVariantSerializer(read_only=True)
+    
+    class Meta:
+        model = CartItem
+        fields = ['id', 'product', 'variant', 'quantity', 'created_at']

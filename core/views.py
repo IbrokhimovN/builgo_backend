@@ -29,9 +29,8 @@ from .serializers import (
     CustomerSerializer, StoreSerializer,
     CategorySerializer, ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     OrderSerializer, OrderCreateSerializer, SellerSerializer,
-    OrderSerializer, OrderCreateSerializer, SellerSerializer,
     LocationSerializer, LocationCreateSerializer, StoreRatingSerializer,
-    SellerStoreUpdateSerializer
+    SellerStoreUpdateSerializer, CartItemSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -181,6 +180,17 @@ class UniversalSearchView(APIView):
             name__icontains=query,
             store__is_active=True
         )[:10]
+        
+        # Track search term
+        if query:
+            from .models import SearchTerm
+            try:
+                term_obj, created = SearchTerm.objects.get_or_create(term=query.lower())
+                if not created:
+                    term_obj.count += 1
+                    term_obj.save(update_fields=['count', 'updated_at'])
+            except Exception as e:
+                logger.error(f"Failed to track search term: {e}")
         
         return Response({
             "products": ProductListSerializer(products, many=True).data,
@@ -1036,3 +1046,262 @@ class SellerLocationDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
             
         return super().destroy(request, *args, **kwargs)
+
+# ============================================
+# CART ENDPOINTS (authenticated)
+# ============================================
+
+from .serializers import CartItemSerializer
+
+class CartItemListView(APIView):
+    """
+    GET /api/customer/cart/
+    POST /api/customer/cart/
+    List cart items or add item to cart. Authenticated via initData or BotSecret.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            customer = Customer.objects.get(telegram_id=telegram_id)
+        except Customer.DoesNotExist:
+            return Response([])
+
+        from .models import CartItem
+        items = CartItem.objects.filter(customer=customer).select_related('product', 'variant')
+        return Response(CartItemSerializer(items, many=True).data)
+
+    def post(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            customer = Customer.objects.get(telegram_id=telegram_id)
+        except Customer.DoesNotExist:
+             return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        product_id = request.data.get('product_id')
+        variant_id = request.data.get('variant_id')
+        quantity = request.data.get('quantity', 1)
+
+        if not product_id:
+             return Response({'error': 'product_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+             product = Product.objects.get(id=product_id, is_available=True)
+        except Product.DoesNotExist:
+             return Response({'error': 'Product not found or unavailable'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .models import ProductVariant, CartItem
+
+        variant = None
+        if variant_id:
+             try:
+                 variant = ProductVariant.objects.get(id=variant_id, product=product)
+             except ProductVariant.DoesNotExist:
+                 return Response({'error': 'Variant not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check against existing items from different stores
+        if CartItem.objects.filter(customer=customer).exclude(product__store=product.store).exists():
+             return Response({'error': 'Cart contains items from another store', 'conflict': True}, status=status.HTTP_409_CONFLICT)
+
+        cart_item, created = CartItem.objects.get_or_create(
+             customer=customer,
+             product=product,
+             variant=variant,
+             defaults={'quantity': quantity}
+        )
+
+        if not created:
+             cart_item.quantity += int(quantity)
+             cart_item.save()
+
+        return Response(CartItemSerializer(cart_item).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class CartItemDetailView(APIView):
+    """
+    PATCH /api/customer/cart/{id}/
+    DELETE /api/customer/cart/{id}/
+    Update quantity or delete cart item.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def patch(self, request, pk):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+             customer = Customer.objects.get(telegram_id=telegram_id)
+        except Customer.DoesNotExist:
+             return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        quantity = request.data.get('quantity')
+        if quantity is None:
+             return Response({'error': 'quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
+             
+        try:
+            quantity_int = int(quantity)
+        except ValueError:
+            return Response({'error': 'invalid quantity format'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import CartItem
+        try:
+             item = CartItem.objects.get(id=pk, customer=customer)
+        except CartItem.DoesNotExist:
+             return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if quantity_int <= 0:
+             item.delete()
+             return Response(status=status.HTTP_204_NO_CONTENT)
+
+        item.quantity = quantity_int
+        item.save()
+        return Response(CartItemSerializer(item).data)
+
+    def delete(self, request, pk):
+         telegram_id = get_telegram_id(request)
+         if not telegram_id:
+             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+         try:
+              customer = Customer.objects.get(telegram_id=telegram_id)
+         except Customer.DoesNotExist:
+              return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+         from .models import CartItem
+         try:
+              item = CartItem.objects.get(id=pk, customer=customer)
+              item.delete()
+         except CartItem.DoesNotExist:
+              return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+
+         return Response(status=status.HTTP_204_NO_CONTENT)
+
+class CartClearView(APIView):
+     """
+     DELETE /api/customer/cart/clear/
+     Clear all items in cart.
+     """
+     authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+     
+     def delete(self, request):
+         telegram_id = get_telegram_id(request)
+         if not telegram_id:
+             return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+         try:
+              customer = Customer.objects.get(telegram_id=telegram_id)
+         except Customer.DoesNotExist:
+              return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+         from .models import CartItem
+         CartItem.objects.filter(customer=customer).delete()
+         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SearchSuggestionView(APIView):
+    """
+    GET /api/search/suggestions/?q=
+    Returns top search term suggestions matching q.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        query = request.GET.get('q', '').strip()
+        if not query:
+            return Response({"suggestions": []})
+        
+        from .models import SearchTerm
+        terms = SearchTerm.objects.filter(term__icontains=query.lower()).order_by('-count', '-updated_at')[:10]
+        return Response({"suggestions": [t.term for t in terms]})
+
+
+class SellerAnalyticsView(APIView):
+    """
+    GET /api/seller/analytics/
+    Returns orders_today, revenue_today, top_products.
+    Authenticated via initData.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def get(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response({'error': 'telegram_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+            
+        from django.utils import timezone
+        today = timezone.localtime().date()
+        
+        orders_today_qs = Order.objects.filter(store=seller.store, created_at__date=today)
+        orders_today_count = orders_today_qs.count()
+        
+        valid_orders_today = orders_today_qs.exclude(status='cancelled')
+        
+        from django.db.models import Sum, F
+        revenue_calc = OrderItem.objects.filter(order__in=valid_orders_today).annotate(
+            total_price=F('quantity') * F('price_at_order')
+        ).aggregate(sum=Sum('total_price'))['sum']
+        
+        revenue_today = revenue_calc if revenue_calc else 0.0
+
+        top_items = OrderItem.objects.filter(order__store=seller.store, order__status__in=['done', 'processing', 'new']).values(
+            'product__id', 'product__name'
+        ).annotate(
+            total_sold=Sum('quantity')
+        ).order_by('-total_sold')[:5]
+        
+        top_products = [
+            {
+                "id": item['product__id'],
+                "name": item['product__name'],
+                "sold": item['total_sold']
+            }
+            for item in top_items
+        ]
+        
+        return Response({
+            "orders_today": orders_today_count,
+            "revenue_today": revenue_today,
+            "top_products": top_products
+        })
+
+
+class ProductRecommendationView(APIView):
+    """
+    GET /api/products/<int:pk>/related/
+    Returns related products (same category).
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        try:
+            product = Product.objects.get(pk=pk)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        queryset = Product.objects.select_related('store', 'category').filter(
+            category=product.category,
+            store=product.store,
+            is_available=True
+        ).exclude(pk=pk).order_by('-created_at')[:10]
+        
+        if not queryset.exists():
+            queryset = Product.objects.select_related('store', 'category').filter(
+                store=product.store,
+                is_available=True
+            ).exclude(pk=pk).order_by('-created_at')[:10]
+            
+        return Response(ProductListSerializer(queryset, many=True).data)

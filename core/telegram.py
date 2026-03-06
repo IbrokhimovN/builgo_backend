@@ -13,15 +13,13 @@ def notify_seller_new_order(order):
         customer = order.customer
         location = customer.locations.filter(is_default=True).first()
 
-        map_link = "Manzil ko'rsatilmagan"
-        if location:
-            map_link = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
+    
 
         message = (
             "📦 New Order!\n\n"
             f"Order ID: #{order.id}\n"
             f"Customer: {customer.first_name}\n"
-            # f"📍 Xarita: {map_link}"
+            
         )
 
         url_api = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"

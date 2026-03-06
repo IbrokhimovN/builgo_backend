@@ -194,6 +194,10 @@ class Product(models.Model):
     )
     name = models.CharField(max_length=200)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    old_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    installment_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    rating = models.FloatField(default=0.0)
+    reviews_count = models.PositiveIntegerField(default=0)
     unit = models.CharField(max_length=10, choices=UNIT_CHOICES)
     description = models.TextField(blank=True)
     quantity = models.PositiveIntegerField(default=0)
@@ -341,3 +345,86 @@ class Location(models.Model):
             elif self.store:
                 Location.objects.filter(store=self.store, is_default=True).update(is_default=False)
         super().save(*args, **kwargs)
+class ProductImage(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
+    image = models.ImageField(upload_to='products/gallery/')
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'product_images'
+        ordering = ['order', 'id']
+        verbose_name_plural = 'Product Images'
+
+    def __str__(self):
+        return f"Image for {self.product.name}"
+
+
+class ProductAttribute(models.Model):
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        db_table = 'product_attributes'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class ProductAttributeValue(models.Model):
+    attribute = models.ForeignKey(ProductAttribute, on_delete=models.CASCADE, related_name='values')
+    value = models.CharField(max_length=100)
+
+    class Meta:
+        db_table = 'product_attribute_values'
+        unique_together = ('attribute', 'value')
+        ordering = ['attribute__name', 'value']
+
+    def __str__(self):
+        return f"{self.attribute.name}: {self.value}"
+
+
+class ProductVariant(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='variants')
+    sku = models.CharField(max_length=50, blank=True, null=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.PositiveIntegerField(default=0)
+    attribute_values = models.ManyToManyField(ProductAttributeValue, related_name='variants')
+
+    class Meta:
+        db_table = 'product_variants'
+
+    def __str__(self):
+        return f"{self.product.name} - Variant {self.id}"
+
+
+class CartItem(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='cart_items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
+    quantity = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'cart_items'
+        unique_together = ('customer', 'product', 'variant')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        var_text = f" ({self.variant})" if self.variant else ""
+        return f"{self.customer.first_name}'s Cart: {self.product.name}{var_text} x {self.quantity}"
+
+class SearchTerm(models.Model):
+    """
+    Model for tracking user search queries to provide suggestions.
+    """
+    term = models.CharField(max_length=255, unique=True)
+    count = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'search_terms'
+        ordering = ['-count', '-updated_at']
+
+    def __str__(self):
+        return f"{self.term} ({self.count})"

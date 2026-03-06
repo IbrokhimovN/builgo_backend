@@ -6,7 +6,10 @@ Hardened against destructive operations.
 import logging
 from django.contrib import admin
 from django.db.models import ProtectedError
-from .models import Customer, Store, Seller, Category, Product, Order, OrderItem, Location
+from .models import (
+    Customer, Store, Seller, Category, Product, Order, OrderItem, Location,
+    ProductImage, ProductAttribute, ProductAttributeValue, ProductVariant, CartItem
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,17 @@ class CategoryAdmin(admin.ModelAdmin):
     raw_id_fields = ['store']
 
 
+class ProductImageInline(admin.TabularInline):
+    model = ProductImage
+    extra = 1
+
+
+class ProductVariantInline(admin.TabularInline):
+    model = ProductVariant
+    extra = 1
+    filter_horizontal = ('attribute_values',)
+
+
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     """
@@ -140,6 +154,7 @@ class ProductAdmin(admin.ModelAdmin):
     search_fields = ['name', 'store__name']
     readonly_fields = ['created_at', 'updated_at']
     raw_id_fields = ['store', 'category']
+    inlines = [ProductImageInline, ProductVariantInline]
     actions = ['deactivate_products', 'activate_products']
 
     def delete_model(self, request, obj):
@@ -200,3 +215,22 @@ class LocationAdmin(admin.ModelAdmin):
     search_fields = ['name', 'address', 'customer__first_name', 'customer__last_name', 'store__name']
     readonly_fields = ['created_at', 'updated_at']
     raw_id_fields = ['customer', 'store']
+
+@admin.register(ProductAttribute)
+class ProductAttributeAdmin(admin.ModelAdmin):
+    list_display = ['name']
+    search_fields = ['name']
+
+@admin.register(ProductAttributeValue)
+class ProductAttributeValueAdmin(admin.ModelAdmin):
+    list_display = ['attribute', 'value']
+    list_filter = ['attribute']
+    search_fields = ['value']
+
+@admin.register(CartItem)
+class CartItemAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'product', 'variant', 'quantity', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['customer__first_name', 'product__name']
+    raw_id_fields = ['customer', 'product', 'variant']
+
