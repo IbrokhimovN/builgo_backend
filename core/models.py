@@ -152,10 +152,13 @@ class Category(models.Model):
     Product category — scoped to a specific store.
     """
     name = models.CharField(max_length=100)
+    icon = models.CharField(max_length=255, null=True, blank=True)
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
-        related_name='categories'
+        related_name='categories',
+        null=True,
+        blank=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -165,7 +168,7 @@ class Category(models.Model):
         verbose_name_plural = 'Categories'
 
     def __str__(self):
-        return f"{self.name} ({self.store.name})"
+        return f"{self.name} ({self.store.name})" if self.store else self.name
 
 
 class Product(models.Model):

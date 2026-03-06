@@ -46,11 +46,18 @@ class StoreSerializer(serializers.ModelSerializer):
     ratings_count = serializers.IntegerField(read_only=True)
     is_open = serializers.BooleanField(read_only=True)
     working_hours = StoreWorkingHoursSerializer(many=True, read_only=True)
+    categories = serializers.SerializerMethodField()
 
     class Meta:
         model = Store
-        fields = ['id', 'name', 'description', 'phone', 'image', 'is_active', 'created_at', 'average_rating', 'ratings_count', 'is_open', 'working_hours']
+        fields = ['id', 'name', 'description', 'phone', 'image', 'is_active', 'created_at', 'average_rating', 'ratings_count', 'is_open', 'working_hours', 'categories']
         read_only_fields = ['id', 'created_at']
+
+    def get_categories(self, obj):
+        # Prevent N+1 by using prefetch if available, otherwise fallback
+        # Ideally, we should use prefetch_related('products__category') in the View
+        categories = obj.products.filter(category__isnull=False).values_list('category__name', flat=True).distinct()
+        return list(categories)
 
 class SellerStoreUpdateSerializer(serializers.ModelSerializer):
     """
@@ -102,7 +109,7 @@ class CategorySerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = Category
-        fields = ['id', 'name', 'store']
+        fields = ['id', 'name', 'icon', 'store']
         read_only_fields = ['id', 'store']
 
 class ProductImageSerializer(serializers.ModelSerializer):

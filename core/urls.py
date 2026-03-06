@@ -16,8 +16,8 @@ urlpatterns = [
     # Seller check (bot-authenticated)
     path('check-seller/', views.CheckSellerView.as_view(), name='check-seller'),
 
-    # Public buyer endpoints
     path('stores/', views.StoreListView.as_view(), name='store-list'),
+    path('categories/', views.CategoryListView.as_view(), name='category-list'),
     path('stores/<int:store_id>/categories/', views.StoreCategoriesView.as_view(), name='store-categories'),
     path('stores/<int:store_id>/products/', views.StoreProductsView.as_view(), name='store-products'),
     path('products/<int:pk>/', views.StoreProductDetailView.as_view(), name='product-detail'),

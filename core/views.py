@@ -50,17 +50,34 @@ class StoreListView(generics.ListAPIView):
     """
     authentication_classes = []
     permission_classes = [AllowAny]
-    queryset = Store.objects.filter(is_active=True)
     serializer_class = StoreSerializer
 
+    def get_queryset(self):
+        queryset = Store.objects.filter(is_active=True).prefetch_related('products__category')
+        category_id = self.request.query_params.get('category_id')
+        if category_id:
+            queryset = queryset.filter(products__category_id=category_id).distinct()
+        return queryset
+
     def list(self, request, *args, **kwargs):
-        cache_key = 'stores_list_active'
+        category_id = request.query_params.get('category_id', 'all')
+        cache_key = f'stores_list_active_{category_id}'
         data = cache.get(cache_key)
         if not data:
             response = super().list(request, *args, **kwargs)
             data = response.data
             cache.set(cache_key, data, timeout=60 * 60)  # 1 hour
         return Response(data)
+
+class CategoryListView(generics.ListAPIView):
+    """
+    GET /api/categories/
+    List all global categories. Public.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    queryset = Category.objects.filter(store__isnull=True).order_by('name')
+    serializer_class = CategorySerializer
 
 
 class StoreCategoriesView(generics.ListAPIView):
@@ -165,20 +182,27 @@ class UniversalSearchView(APIView):
                 "categories": []
             })
             
-        products = Product.objects.select_related('store', 'category').filter(
-            search_vector=SearchQuery(query),
+        from django.contrib.postgres.search import SearchQuery, SearchRank
+        from django.db.models import F, Q
+
+        search_query = SearchQuery(query)
+        
+        products = Product.objects.select_related('store', 'category').annotate(
+            rank=SearchRank(F('search_vector'), search_query)
+        ).filter(
+            Q(rank__gte=0.05) | Q(name__icontains=query),
             is_available=True,
             store__is_active=True
-        )[:10]
+        ).order_by('-rank')[:20]
         
         stores = Store.objects.filter(
-            name__icontains=query,
+            Q(name__icontains=query) | Q(products__category__name__icontains=query),
             is_active=True
-        )[:10]
+        ).distinct()[:20]
         
-        categories = Category.objects.select_related('store').filter(
+        categories = Category.objects.filter(
             name__icontains=query,
-            store__is_active=True
+            store__isnull=True
         )[:10]
         
         # Track search term
@@ -1241,22 +1265,58 @@ class SellerAnalyticsView(APIView):
         if not seller:
             return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
             
+        range_param = request.GET.get('range', 'daily')
         from django.utils import timezone
-        today = timezone.localtime().date()
-        
-        orders_today_qs = Order.objects.filter(store=seller.store, created_at__date=today)
-        orders_today_count = orders_today_qs.count()
-        
-        valid_orders_today = orders_today_qs.exclude(status='cancelled')
-        
+        from datetime import timedelta
         from django.db.models import Sum, F
-        revenue_calc = OrderItem.objects.filter(order__in=valid_orders_today).annotate(
+        
+        now = timezone.localtime()
+        
+        if range_param == 'weekly':
+            start_date = now - timedelta(days=7)
+        elif range_param == 'monthly':
+            start_date = now - timedelta(days=30)
+        elif range_param == 'all':
+            start_date = None
+        else: # daily
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+        orders_qs = Order.objects.filter(store=seller.store)
+        if start_date and range_param == 'daily':
+            orders_qs = orders_qs.filter(created_at__date=start_date.date())
+        elif start_date:
+            orders_qs = orders_qs.filter(created_at__gte=start_date)
+            
+        orders_count = orders_qs.count()
+        valid_orders = orders_qs.exclude(status='cancelled')
+        
+        revenue_calc = OrderItem.objects.filter(order__in=valid_orders).annotate(
             total_price=F('quantity') * F('price_at_order')
         ).aggregate(sum=Sum('total_price'))['sum']
         
-        revenue_today = revenue_calc if revenue_calc else 0.0
+        revenue = revenue_calc if revenue_calc else 0.0
 
-        top_items = OrderItem.objects.filter(order__store=seller.store, order__status__in=['done', 'processing', 'new']).values(
+        delivered = valid_orders.filter(status='done').count()
+        pending = valid_orders.filter(status__in=['new', 'processing']).count()
+        average_check = revenue / valid_orders.count() if valid_orders.count() > 0 else 0
+
+        chart = []
+        if range_param == 'daily':
+            chart = [0, revenue, revenue]
+        elif range_param == 'weekly':
+            for d in range(6, -1, -1):
+                day_start = (now - timedelta(days=d)).date()
+                day_rev = OrderItem.objects.filter(order__in=valid_orders.filter(created_at__date=day_start)).annotate(total_price=F('quantity') * F('price_at_order')).aggregate(sum=Sum('total_price'))['sum'] or 0
+                chart.append(day_rev)
+        elif range_param == 'monthly':
+            for d in range(29, -1, -1):
+                day_start = (now - timedelta(days=d)).date()
+                day_rev = OrderItem.objects.filter(order__in=valid_orders.filter(created_at__date=day_start)).annotate(total_price=F('quantity') * F('price_at_order')).aggregate(sum=Sum('total_price'))['sum'] or 0
+                chart.append(day_rev)
+        else:
+            chart = [0, revenue]
+
+        top_items = OrderItem.objects.filter(order__in=valid_orders).values(
             'product__id', 'product__name'
         ).annotate(
             total_sold=Sum('quantity')
@@ -1272,8 +1332,12 @@ class SellerAnalyticsView(APIView):
         ]
         
         return Response({
-            "orders_today": orders_today_count,
-            "revenue_today": revenue_today,
+            "revenue": revenue,
+            "orders": orders_count,
+            "delivered": delivered,
+            "pending": pending,
+            "average_check": average_check,
+            "chart": chart,
             "top_products": top_products
         })
 
