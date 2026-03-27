@@ -1,17 +1,108 @@
 """
 DRF Serializers for BuildGo Backend.
-No User model. No auth. telegram_id is identity.
+Custom User model + JWT authentication. telegram_id is identity.
 """
 
 import logging
 from django.db import transaction
+from django.contrib.auth import authenticate
 from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken
 from .models import (
-    Customer, Store, Seller, Category, Product, Order, OrderItem, Location, StoreRating, StoreWorkingHours,
-    ProductImage, ProductAttributeValue, ProductVariant, CartItem
+    User, Customer, Store, Seller, Category, Product, Order, OrderItem, Location, StoreRating, StoreWorkingHours,
+    ProductImage, ProductAttributeValue, ProductVariant, CartItem, StoreDocument
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# Auth Serializers
+# ============================================
+
+class SetPasswordSerializer(serializers.Serializer):
+    """
+    Serializer for Telegram-authenticated users to set web password + phone_number.
+    """
+    phone_number = serializers.CharField(max_length=20)
+    password = serializers.CharField(min_length=6, write_only=True)
+
+    def validate_phone_number(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Phone number is required.")
+        # Check for uniqueness (excluding the current user)
+        request = self.context.get('request')
+        qs = User.objects.filter(phone_number=value)
+        if request and hasattr(request, 'telegram_id') and request.telegram_id:
+            qs = qs.exclude(telegram_id=request.telegram_id)
+        if qs.exists():
+            raise serializers.ValidationError("This phone number is already registered.")
+        return value
+
+
+class WebLoginSerializer(serializers.Serializer):
+    """
+    Serializer for web (non-Telegram) login via phone_number + password.
+    Returns JWT access and refresh tokens.
+    """
+    phone_number = serializers.CharField(max_length=20)
+    password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        phone_number = attrs.get('phone_number', '').strip()
+        password = attrs.get('password', '')
+
+        if not phone_number or not password:
+            raise serializers.ValidationError("Phone number and password are required.")
+
+        user = authenticate(
+            request=self.context.get('request'),
+            phone_number=phone_number,
+            password=password,
+        )
+
+        if user is None:
+            raise serializers.ValidationError("Invalid phone number or password.")
+
+        if not user.is_active:
+            raise serializers.ValidationError("This account is deactivated.")
+
+        # Generate JWT tokens
+        refresh = RefreshToken.for_user(user)
+
+        return {
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            'user_id': user.id,
+            'phone_number': user.phone_number,
+        }
+
+
+class StoreDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreDocument
+        fields = ['id', 'store', 'document_type', 'file', 'uploaded_at']
+        read_only_fields = ['id', 'store', 'uploaded_at']
+
+
+class StoreVerificationSerializer(serializers.Serializer):
+    """
+    Accepts multipart/form-data for store verification.
+    """
+    legal_name = serializers.CharField(max_length=300)
+    inn = serializers.CharField(max_length=30)
+    documents = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        allow_empty=True,
+    )
+    document_types = serializers.ListField(
+        child=serializers.ChoiceField(choices=['guvohnoma', 'passport']),
+        required=False,
+        allow_empty=True,
+    )
+
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -50,7 +141,7 @@ class StoreSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Store
-        fields = ['id', 'name', 'description', 'phone', 'image', 'is_active', 'created_at', 'average_rating', 'ratings_count', 'is_open', 'working_hours', 'categories']
+        fields = ['id', 'name', 'description', 'phone', 'image', 'is_active', 'created_at', 'average_rating', 'ratings_count', 'is_open', 'working_hours', 'categories', 'status', 'legal_name', 'inn']
         read_only_fields = ['id', 'created_at']
 
     def get_categories(self, obj):

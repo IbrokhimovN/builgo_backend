@@ -2,13 +2,21 @@
 URL configuration for core app.
 
 Public endpoints: stores, categories, products, search
-Authenticated endpoints: all others (initData or BotSecret)
+Authenticated endpoints: all others (initData, BotSecret, or JWT)
 """
 
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 urlpatterns = [
+    # Auth endpoints
+    path('auth/set-password/', views.SetPasswordView.as_view(), name='auth-set-password'),
+    path('auth/web-login/', views.WebLoginView.as_view(), name='auth-web-login'),
+    path('auth/register-store/', views.RegisterStoreView.as_view(), name='auth-register-store'),
+    path('auth/verify-store/', views.VerifyStoreView.as_view(), name='auth-verify-store'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+
     # Customer (bot-authenticated)
     path('customers/', views.CustomerCreateView.as_view(), name='customer-create'),
     path('customers/check/', views.CustomerCheckView.as_view(), name='customer-check'),
@@ -55,4 +63,8 @@ urlpatterns = [
     # Seller location endpoints (authenticated)
     path('seller/locations/', views.SellerLocationListCreateView.as_view(), name='seller-locations'),
     path('seller/locations/<int:pk>/', views.SellerLocationDetailView.as_view(), name='seller-location-detail'),
+
+    # RBAC demo endpoints (for testing permissions)
+    path('demo/create-product/', views.CreateProductExampleView.as_view(), name='demo-create-product'),
+    path('demo/create-order/', views.CreateOrderExampleView.as_view(), name='demo-create-order'),
 ]

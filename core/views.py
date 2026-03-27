@@ -2,6 +2,7 @@
 API Views for BuildGo Backend.
 
 Authentication:
+- JWT Authentication (web login via phone_number + password)
 - Mini App requests: TelegramInitDataAuthentication (HMAC-SHA256)
 - Bot requests: BotSecretAuthentication (shared secret header)
 - Public endpoints: stores, categories, products, search (no auth required)
@@ -12,7 +13,7 @@ Role logic is UNCHANGED. telegram_id resolution stays per-request.
 import logging
 from django.db import IntegrityError
 from rest_framework import generics, status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q
@@ -24,20 +25,228 @@ from .authentication import (
     BotSecretAuthentication,
     get_telegram_id,
 )
-from .models import Customer, Store, Seller, Category, Product, Order, Location
+from .models import Customer, Store, Seller, Category, Product, Order, Location, User, StoreDocument
 from .serializers import (
     CustomerSerializer, StoreSerializer,
     CategorySerializer, ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     OrderSerializer, OrderCreateSerializer, SellerSerializer,
     LocationSerializer, LocationCreateSerializer, StoreRatingSerializer,
-    SellerStoreUpdateSerializer, CartItemSerializer
+    SellerStoreUpdateSerializer, CartItemSerializer,
+    SetPasswordSerializer, WebLoginSerializer, StoreVerificationSerializer, StoreDocumentSerializer,
 )
+from .permissions import IsBuyer, IsSeller, IsUnverifiedSeller
 
 logger = logging.getLogger(__name__)
 
 # Valid order statuses for seller updates
 VALID_ORDER_STATUSES = {'new', 'processing', 'done', 'cancelled'}
 
+
+# ============================================
+# AUTH ENDPOINTS (JWT + Telegram)
+# ============================================
+
+class SetPasswordView(APIView):
+    """
+    POST /api/auth/set-password/
+    For Telegram-authenticated users to set a web password and save phone_number.
+    Creates or updates the User record linked via telegram_id.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def post(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response(
+                {'error': 'telegram_id is required (authenticate via Telegram first)'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        serializer = SetPasswordSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        phone_number = serializer.validated_data['phone_number']
+        password = serializer.validated_data['password']
+
+        # Get or create User by telegram_id
+        user, created = User.objects.get_or_create(
+            telegram_id=telegram_id,
+            defaults={'phone_number': phone_number}
+        )
+
+        if not created:
+            user.phone_number = phone_number
+
+        user.set_password(password)
+        user.save()
+
+        # Also update Customer's phone if customer record exists
+        Customer.objects.filter(telegram_id=telegram_id).update(phone=phone_number)
+
+        logger.info(
+            "User %s: telegram_id=%s set web password",
+            "created" if created else "updated", telegram_id
+        )
+
+        return Response({
+            'message': 'Password set successfully.',
+            'phone_number': phone_number,
+        }, status=status.HTTP_200_OK)
+
+
+class WebLoginView(APIView):
+    """
+    POST /api/auth/web-login/
+    Authenticate via phone_number + password, returning JWT tokens.
+    No Telegram auth required.
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = WebLoginSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.validated_data, status=status.HTTP_200_OK)
+
+
+class RegisterStoreView(APIView):
+    """
+    POST /api/auth/register-store/
+    Creates a Store profile for an authenticated Telegram user.
+    Request body: { "name": "Store Name" }
+    Creates: User (if not exists) → Store → Seller record.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+
+    def post(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response(
+                {'error': 'telegram_id is required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        store_name = request.data.get('name', '').strip()
+        if not store_name:
+            return Response(
+                {'error': 'Store name is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if user already has a store (via Seller record)
+        if Seller.objects.filter(telegram_id=telegram_id).exists():
+            return Response(
+                {'error': 'You already have a store registered'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get or create User for this telegram_id
+        user, _ = User.objects.get_or_create(
+            telegram_id=telegram_id,
+            defaults={'phone_number': f'tg_{telegram_id}'}
+        )
+
+        # Create Store linked to user
+        store = Store.objects.create(
+            user=user,
+            name=store_name,
+            status='pending',
+        )
+
+        # Create Seller record
+        tg_user = getattr(request, '_tg_user', None)
+        seller_name = ''
+        if tg_user:
+            seller_name = f"{tg_user.get('first_name', '')} {tg_user.get('last_name', '')}".strip()
+        if not seller_name:
+            seller_name = store_name
+
+        seller = Seller.objects.create(
+            telegram_id=telegram_id,
+            name=seller_name,
+            store=store,
+        )
+
+        logger.info(
+            "Store '%s' (id=%d) registered by telegram_id=%s",
+            store.name, store.id, telegram_id
+        )
+
+        from .serializers import SellerSerializer
+        return Response({
+            'message': 'Store registered successfully.',
+            'is_seller': True,
+            'seller': SellerSerializer(seller).data,
+        }, status=status.HTTP_201_CREATED)
+
+class VerifyStoreView(APIView):
+    """
+    POST /api/auth/verify-store/
+    Accepts multipart/form-data with INN, legal_name, and document file uploads.
+    Authenticated via Telegram initData or JWT.
+    Uses IsAuthenticated — sellers must be logged in but do NOT need to be approved yet.
+    """
+    authentication_classes = [TelegramInitDataAuthentication, BotSecretAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        telegram_id = get_telegram_id(request)
+        if not telegram_id:
+            return Response(
+                {'error': 'telegram_id is required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        seller = _get_seller(telegram_id)
+        if not seller:
+            return Response({'error': 'Not a seller'}, status=status.HTTP_403_FORBIDDEN)
+
+        store = seller.store
+
+        # Extract fields
+        legal_name = request.data.get('legal_name', '').strip()
+        inn = request.data.get('inn', '').strip()
+
+        if not legal_name or not inn:
+            return Response(
+                {'error': 'legal_name and inn are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update store legal fields
+        store.legal_name = legal_name
+        store.inn = inn
+        store.status = 'pending'
+        store.save(update_fields=['legal_name', 'inn', 'status', 'updated_at'])
+
+        # Process uploaded documents
+        documents_created = []
+        files = request.FILES.getlist('documents')
+        doc_types = request.data.getlist('document_types') if hasattr(request.data, 'getlist') else []
+
+        for i, file in enumerate(files):
+            doc_type = doc_types[i] if i < len(doc_types) else 'guvohnoma'
+            if doc_type not in ('guvohnoma', 'passport'):
+                doc_type = 'guvohnoma'
+            doc = StoreDocument.objects.create(
+                store=store,
+                document_type=doc_type,
+                file=file,
+            )
+            documents_created.append(StoreDocumentSerializer(doc).data)
+
+        logger.info(
+            "Store '%s' (id=%d) submitted verification by seller telegram_id=%s",
+            store.name, store.id, telegram_id
+        )
+
+        return Response({
+            'message': 'Verification documents submitted successfully.',
+            'store_status': store.status,
+            'legal_name': store.legal_name,
+            'inn': store.inn,
+            'documents': documents_created,
+        }, status=status.HTTP_200_OK)
 
 # ============================================
 # PUBLIC ENDPOINTS (no auth required)
@@ -1369,3 +1578,37 @@ class ProductRecommendationView(APIView):
             ).exclude(pk=pk).order_by('-created_at')[:10]
             
         return Response(ProductListSerializer(queryset, many=True).data)
+
+
+# ============================================
+# RBAC DEMO ENDPOINTS
+# ============================================
+
+class CreateProductExampleView(APIView):
+    """
+    POST /api/demo/create-product/
+    Demo endpoint protected by IsSeller permission.
+    Only sellers with store.status == 'approved' can access this.
+    """
+    permission_classes = [IsSeller]
+
+    def post(self, request):
+        return Response({
+            'message': 'Success! You are an approved seller and can create products.',
+            'user': str(request.user),
+        }, status=status.HTTP_200_OK)
+
+
+class CreateOrderExampleView(APIView):
+    """
+    POST /api/demo/create-order/
+    Demo endpoint protected by IsBuyer permission.
+    Only users with a linked Customer profile can access this.
+    """
+    permission_classes = [IsBuyer]
+
+    def post(self, request):
+        return Response({
+            'message': 'Success! You are a buyer and can create orders.',
+            'user': str(request.user),
+        }, status=status.HTTP_200_OK)

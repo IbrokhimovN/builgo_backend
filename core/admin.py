@@ -5,13 +5,44 @@ Hardened against destructive operations.
 
 import logging
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.db.models import ProtectedError
 from .models import (
-    Customer, Store, Seller, Category, Product, Order, OrderItem, Location,
-    ProductImage, ProductAttribute, ProductAttributeValue, ProductVariant, CartItem
+    User, Customer, Store, Seller, Category, Product, Order, OrderItem, Location,
+    ProductImage, ProductAttribute, ProductAttributeValue, ProductVariant, CartItem,
+    StoreDocument
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# Custom User Admin
+# ============================================
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    """Admin for the custom User model (phone_number as USERNAME_FIELD)."""
+    list_display = ['phone_number', 'telegram_id', 'is_active', 'is_staff', 'date_joined']
+    list_filter = ['is_active', 'is_staff', 'date_joined']
+    search_fields = ['phone_number', 'telegram_id']
+    ordering = ['-date_joined']
+
+    fieldsets = (
+        (None, {'fields': ('phone_number', 'password')}),
+        ('Telegram', {'fields': ('telegram_id',)}),
+        ('Personal', {'fields': ('first_name', 'last_name')}),
+        ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
+        ('Dates', {'fields': ('last_login', 'date_joined')}),
+    )
+
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('phone_number', 'telegram_id', 'password1', 'password2'),
+        }),
+    )
+
 
 
 @admin.register(Customer)
@@ -23,6 +54,12 @@ class CustomerAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at']
 
 
+class StoreDocumentInline(admin.TabularInline):
+    model = StoreDocument
+    extra = 0
+    readonly_fields = ['document_type', 'file', 'uploaded_at']
+
+
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
     """
@@ -30,11 +67,12 @@ class StoreAdmin(admin.ModelAdmin):
     If store has sellers, products, or orders, delete will raise ProtectedError.
     Admin must deactivate stores instead of deleting.
     """
-    list_display = ['name', 'is_active', 'seller_count', 'product_count', 'order_count', 'created_at']
-    list_filter = ['is_active', 'created_at']
-    search_fields = ['name']
+    list_display = ['name', 'status', 'is_active', 'seller_count', 'product_count', 'order_count', 'created_at']
+    list_filter = ['is_active', 'status', 'created_at']
+    search_fields = ['name', 'legal_name', 'inn']
     readonly_fields = ['created_at', 'updated_at']
-    actions = ['deactivate_stores', 'activate_stores']
+    inlines = [StoreDocumentInline]
+    actions = ['deactivate_stores', 'activate_stores', 'approve_stores', 'reject_stores']
 
     def seller_count(self, obj):
         return obj.sellers.count()
@@ -76,6 +114,23 @@ class StoreAdmin(admin.ModelAdmin):
         count = queryset.update(is_active=True)
         self.message_user(request, f"{count} store(s) activated.")
 
+    @admin.action(description="Approve selected stores")
+    def approve_stores(self, request, queryset):
+        count = queryset.update(status='approved')
+        self.message_user(request, f"{count} store(s) approved.")
+
+    @admin.action(description="Reject selected stores")
+    def reject_stores(self, request, queryset):
+        count = queryset.update(status='rejected')
+        self.message_user(request, f"{count} store(s) rejected.")
+
+
+@admin.register(StoreDocument)
+class StoreDocumentAdmin(admin.ModelAdmin):
+    list_display = ['store', 'document_type', 'uploaded_at']
+    list_filter = ['document_type', 'uploaded_at']
+    search_fields = ['store__name']
+    readonly_fields = ['uploaded_at']
 
 @admin.register(Seller)
 class SellerAdmin(admin.ModelAdmin):

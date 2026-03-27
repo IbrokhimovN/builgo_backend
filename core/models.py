@@ -1,9 +1,10 @@
 """
 Core models for BuildGo Backend.
-Telegram-only identity: Customer (data) + Seller (admin-controlled).
-NO Django User model. NO authentication.
+Custom User model with phone_number as identity.
+Supports Telegram-based auth + web JWT login.
 """
 
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.db.models import Q, Avg
 from django.utils import timezone
@@ -11,11 +12,77 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField, SearchVector
 
 
+# ============================================
+# Custom User
+# ============================================
+
+class UserManager(BaseUserManager):
+    """
+    Custom manager for User model where phone_number is the unique identifier.
+    """
+    def create_user(self, phone_number, password=None, **extra_fields):
+        if not phone_number:
+            raise ValueError('Phone number is required')
+        extra_fields.setdefault('is_staff', False)
+        extra_fields.setdefault('is_superuser', False)
+        user = self.model(phone_number=phone_number, **extra_fields)
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, phone_number, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
+        return self.create_user(phone_number, password, **extra_fields)
+
+
+class User(AbstractUser):
+    """
+    Custom User model.
+    - username field removed.
+    - USERNAME_FIELD = phone_number.
+    - telegram_id for Telegram identity linking.
+    """
+    username = None  # Remove username field
+
+    phone_number = models.CharField(max_length=20, unique=True)
+    telegram_id = models.BigIntegerField(unique=True, null=True, blank=True)
+
+    USERNAME_FIELD = 'phone_number'
+    REQUIRED_FIELDS = []  # phone_number is already required via USERNAME_FIELD
+
+    objects = UserManager()
+
+    class Meta:
+        db_table = 'users'
+
+    def __str__(self):
+        return self.phone_number
+
+
+# ============================================
+# Customer & Store
+# ============================================
+
 class Customer(models.Model):
     """
-    Customer model — data only, NOT auth.
+    Customer model — linked to User via OneToOneField.
     Created by Telegram bot when buyer registers.
     """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='customer',
+        null=True,
+        blank=True,
+    )
     telegram_id = models.BigIntegerField(unique=True, db_index=True)
     first_name = models.CharField(max_length=150, blank=True, default='')
     last_name = models.CharField(max_length=150, blank=True, default='')
@@ -33,7 +100,21 @@ class Customer(models.Model):
 class Store(models.Model):
     """
     Store model — represents a seller's store.
+    Linked to User via OneToOneField (store owner).
     """
+    STORE_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='store',
+        null=True,
+        blank=True,
+    )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default='')
     phone = models.CharField(max_length=20, blank=True, default='')
@@ -41,6 +122,15 @@ class Store(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Legal / Verification fields
+    legal_name = models.CharField(max_length=300, blank=True, default='')
+    inn = models.CharField(max_length=30, blank=True, default='')
+    status = models.CharField(
+        max_length=10,
+        choices=STORE_STATUS_CHOICES,
+        default='pending',
+    )
 
     class Meta:
         db_table = 'stores'
@@ -73,6 +163,36 @@ class Store(models.Model):
             return False
         return schedule.open_time <= now.time() <= schedule.close_time
 
+
+class StoreDocument(models.Model):
+    """
+    Verification documents uploaded by store owners.
+    """
+    DOCUMENT_TYPE_CHOICES = [
+        ('guvohnoma', 'Guvohnoma'),
+        ('passport', 'Passport'),
+    ]
+
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name='documents',
+    )
+    document_type = models.CharField(max_length=20, choices=DOCUMENT_TYPE_CHOICES)
+    file = models.FileField(upload_to='store_documents/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'store_documents'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.store.name} - {self.get_document_type_display()}"
+
+
+# ============================================
+# Working Hours, Ratings
+# ============================================
 
 class StoreWorkingHours(models.Model):
     """
@@ -122,6 +242,10 @@ class StoreRating(models.Model):
         return f"{self.customer} rated {self.store} {self.rating} stars"
 
 
+# ============================================
+# Seller
+# ============================================
+
 class Seller(models.Model):
     """
     Seller model — admin-controlled ONLY.
@@ -146,6 +270,10 @@ class Seller(models.Model):
     def __str__(self):
         return f"{self.name} - {self.store.name}"
 
+
+# ============================================
+# Category, Product
+# ============================================
 
 class Category(models.Model):
     """
@@ -180,7 +308,7 @@ class Product(models.Model):
         ('dona', 'Dona'),
         ('kg', 'KG'),
         ('m', 'Metr'),
-        ('m2',"Metr kvadrat")
+        ('m2', "Metr kvadrat")
     ]
 
     store = models.ForeignKey(
@@ -230,6 +358,10 @@ class Product(models.Model):
             search_vector=SearchVector('name', 'description')
         )
 
+
+# ============================================
+# Order
+# ============================================
 
 class Order(models.Model):
     """
@@ -293,6 +425,10 @@ class OrderItem(models.Model):
         return f"{self.product.name} x {self.quantity}"
 
 
+# ============================================
+# Location
+# ============================================
+
 class Location(models.Model):
     """
     Location model for customers and stores.
@@ -348,6 +484,12 @@ class Location(models.Model):
             elif self.store:
                 Location.objects.filter(store=self.store, is_default=True).update(is_default=False)
         super().save(*args, **kwargs)
+
+
+# ============================================
+# Product Extras
+# ============================================
+
 class ProductImage(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='products/gallery/')
@@ -416,6 +558,7 @@ class CartItem(models.Model):
     def __str__(self):
         var_text = f" ({self.variant})" if self.variant else ""
         return f"{self.customer.first_name}'s Cart: {self.product.name}{var_text} x {self.quantity}"
+
 
 class SearchTerm(models.Model):
     """

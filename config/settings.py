@@ -1,10 +1,11 @@
 """
 Django settings for BuildGo Backend (Production – DigitalOcean)
-No Django User model. No JWT. No auth middleware.
+Custom User model with JWT authentication.
 """
 
 import os
 from pathlib import Path
+from datetime import timedelta
 from dotenv import load_dotenv
 
 # Load .env
@@ -38,7 +39,9 @@ INSTALLED_APPS = [
 
     # Third party
     'rest_framework',
+    'rest_framework_simplejwt',
     'corsheaders',
+    'storages',
 
     # Local
     'core',
@@ -120,10 +123,9 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Tashkent'
 
 # ======================
-# NO CUSTOM USER MODEL
+# CUSTOM USER MODEL
 # ======================
-# AUTH_USER_MODEL is NOT set — we don't use Django User.
-# Django's default auth.User is kept only for admin login.
+AUTH_USER_MODEL = 'core.User'
 
 # ======================
 # INTERNATIONALIZATION
@@ -142,8 +144,29 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Django 5.x storage config (replaces deprecated STATICFILES_STORAGE)
-# To enable S3 for media, set USE_S3=1 in .env
-if os.getenv("USE_S3", "0") == "1":
+# Set USE_S3=True in .env to enable DigitalOcean Spaces for media files
+USE_S3 = os.getenv('USE_S3', 'False') == 'True'
+
+if USE_S3:
+    # DigitalOcean Spaces (S3-compatible) credentials
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+    AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+    AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'nyc3')
+    AWS_S3_ENDPOINT_URL = os.getenv(
+        'AWS_S3_ENDPOINT_URL',
+        f'https://{AWS_S3_REGION_NAME}.digitaloceanspaces.com'
+    )
+
+    # Public CDN domain for serving files
+    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.{AWS_S3_REGION_NAME}.digitaloceanspaces.com'
+
+    # Permissions & caching
+    AWS_DEFAULT_ACL = 'public-read'
+    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+    AWS_QUERYSTRING_AUTH = False  # Public URLs, no signed query strings
+    AWS_LOCATION = 'media'       # All uploads go into /media/ prefix
+
     STORAGES = {
         'default': {
             'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
@@ -152,13 +175,9 @@ if os.getenv("USE_S3", "0") == "1":
             'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
-    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-    AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
-    AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
-    AWS_S3_ENDPOINT_URL = os.getenv('AWS_S3_ENDPOINT_URL')
-    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
-    AWS_QUERYSTRING_AUTH = False
+
+    # Media URL served from the CDN
+    MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/'
 else:
     STORAGES = {
         'default': {
@@ -168,8 +187,8 @@ else:
             'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
         },
     }
+    MEDIA_URL = '/media/'
 
-MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # ======================
@@ -179,11 +198,12 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ======================
-# DRF — NO AUTH
+# DRF
 # ======================
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'core.authentication.TelegramInitDataAuthentication',
         'core.authentication.BotSecretAuthentication',
     ],
@@ -228,8 +248,22 @@ BOT_API_SECRET = os.getenv("BOT_API_SECRET", "")
 # UPLOAD LIMITS
 # ======================
 
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024   # 5 MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024   # 5 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB (verification docs)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+
+# ======================
+# SIMPLE JWT
+# ======================
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': False,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
 
 # ======================
 # SECURITY HARDENING
